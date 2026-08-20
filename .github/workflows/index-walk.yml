@@ -41,17 +41,17 @@ jobs:
           PIN: ${{ github.job_workflow_sha }}
         run: |
           gh release download "walker-${PIN}" --repo "$WALKER_REPO" \
-            --pattern "pulumi2nix-index-x86_64-linux" \
-            --output pulumi2nix-index || {
+            --pattern "pulumi2nix-index-x86_64-linux.tar.gz" \
+            --output walker.tar.gz || {
               echo "::error::no walker release for ${PIN} — pin index-walk.yml to a sha that has one (see ${WALKER_REPO} releases)"; exit 1; }
-          gh attestation verify pulumi2nix-index --repo "$WALKER_REPO" \
+          gh attestation verify walker.tar.gz --repo "$WALKER_REPO" \
             --format json > attestation.json
           # Belt and braces: the attested provenance must reference the
           # pinned commit itself, not merely any commit of the repo.
           jq -e --arg sha "$PIN" 'tostring | contains($sha)' attestation.json > /dev/null || {
             echo "::error::attestation does not reference pinned sha ${PIN}"; exit 1; }
-          chmod +x pulumi2nix-index
-          rm attestation.json
+          tar -xzf walker.tar.gz pulumi2nix-index  # mode bits survive the tarball
+          rm walker.tar.gz attestation.json
 
       - name: Walk (breadth-first backfill within budget)
         run: |
