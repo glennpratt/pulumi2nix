@@ -30,6 +30,7 @@ jobs:
     permissions:
       contents: write
       issues: write
+      id-token: write # the reusable workflow reads its pin from the OIDC claim
     with:
       provider: ${{ inputs.provider || '' }}
       max-artifacts: ${{ fromJSON(inputs.max-artifacts || '800') }}

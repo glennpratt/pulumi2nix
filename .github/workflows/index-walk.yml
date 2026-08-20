@@ -38,14 +38,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           WALKER_REPO: glennpratt/pulumi2nix
-          # github.job_workflow_sha is unreliable (observed empty on
-          # workflow_dispatch); job_workflow_ref is what OIDC claims use and
-          # carries the caller's pin as owner/repo/path@<ref>.
-          JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
         run: |
-          PIN="${JOB_WORKFLOW_REF##*@}"
+          # The github context's job_workflow_sha/job_workflow_ref are
+          # unreliable (observed empty on workflow_dispatch), so read the
+          # caller's pin from the job's own OIDC token — its signed
+          # job_workflow_ref claim is owner/repo/path@<ref> and cannot be
+          # empty or spoofed. Requires `id-token: write` in the caller.
+          PIN=$(python3 - <<'PY'
+          import base64, json, os, urllib.request
+          req = urllib.request.Request(
+              os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"] + "&audience=pulumi2nix-index",
+              headers={"Authorization": "bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]})
+          tok = json.load(urllib.request.urlopen(req))["value"]
+          seg = tok.split(".")[1]
+          claims = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+          print(claims["job_workflow_ref"].rsplit("@", 1)[1])
+          PY
+          )
           if ! [[ "$PIN" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::index-walk.yml must be pinned to a full commit SHA (got '${PIN}' from '${JOB_WORKFLOW_REF}')"; exit 1
+            echo "::error::index-walk.yml must be pinned to a full commit SHA (OIDC job_workflow_ref gave '${PIN}')"; exit 1
           fi
           echo "walker pin: ${PIN}"
           gh release download "walker-${PIN}" --repo "$WALKER_REPO" \

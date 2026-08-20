@@ -96,7 +96,9 @@ re-hashes random samples continuously and records drift under conflicts/
       single-writer concurrency, drift → auto-filed issue, pinned rev)
 - [x] Reusable workflow `.github/workflows/index-walk.yml` in THIS repo;
       index repo's walk.yml is a ~10-line stub pinning it by SHA — and
-      `github.job_workflow_sha` selects the walker at that same pin, so
+      the OIDC token's signed `job_workflow_ref` claim selects the walker
+      at that same pin (the github context's job_workflow_sha/ref proved
+      unreliably empty on workflow_dispatch), so
       one SHA governs workflow logic + binary (no Nix/uv/rust in index CI)
 - [x] Attested releases over ghcr (decision): walker-release.yml builds a
       static musl binary via `nix build .#pulumi2nix-index-static`
