@@ -2,6 +2,7 @@
 # One name per line; the demand lane (workflow_dispatch) can index anything
 # else ad hoc. Ordering here is not priority — the walk is breadth-first by
 # version rank across all providers.
+akamai
 aws
 aws-native
 azure-native
