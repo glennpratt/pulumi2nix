@@ -23,11 +23,14 @@ rec {
   # and unpack it into a directory shaped like a Pulumi plugin dir.
   fetchPlugin = import ./fetch-plugin.nix { inherit lib systemToTarget; };
 
+  # Fetch the official pulumi/pulumi CLI release (CLI + bundled language hosts).
+  fetchCli = import ./fetch-cli.nix { inherit lib systemToTarget; };
+
   # Synthesize the ~/.pulumi/plugins layout as a linkFarm.
   mkPluginStore = import ./plugin-store.nix { inherit lib; };
 
   # The main user-facing builder: lockFile + pythonEnv -> wrapped `pulumi`.
   mkPulumiEnv = import ./mk-pulumi-env.nix {
-    inherit lib loadLock fetchPlugin mkPluginStore systemToTarget;
+    inherit lib loadLock fetchPlugin fetchCli mkPluginStore systemToTarget;
   };
 }

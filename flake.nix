@@ -31,7 +31,7 @@
       pulumi2nixLib = import ./nix { inherit lib; };
 
       # --- example: examples/random built with uv2nix + pulumi2nix ---------
-      exampleFor = pkgs:
+      exampleFor = pkgs: extraArgs:
         let
           workspace = uv2nix.lib.workspace.loadWorkspace {
             workspaceRoot = ./examples/random;
@@ -49,10 +49,37 @@
           pythonEnv = pythonSet.mkVirtualEnv "pulumi2nix-example-random-env"
             (workspace.deps.default // { pip = [ ]; });
         in
-        pulumi2nixLib.mkPulumiEnv {
+        pulumi2nixLib.mkPulumiEnv ({
           inherit pkgs pythonEnv;
           lockFile = ./examples/random/pulumi-lock.json;
-        };
+        } // extraArgs);
+
+      # Offline end-to-end: preview a stack against a local backend using
+      # only Nix-provided plugins. Fails on any plugin download attempt
+      # (acquisition is disabled) and on any warning (e.g. "from $PATH").
+      mkPreviewCheck = pkgs: checkName: env:
+        pkgs.runCommand "pulumi2nix-${checkName}"
+          { nativeBuildInputs = [ env ]; } ''
+          export HOME="$TMPDIR"
+          export USER=nixbld
+          export PULUMI_SKIP_UPDATE_CHECK=true
+          export PULUMI_CONFIG_PASSPHRASE=test
+          cp -r ${./examples/random}/. project
+          chmod -R +w project
+          cd project
+
+          mkdir -p "$TMPDIR/state"
+          pulumi login "file://$TMPDIR/state"
+          pulumi stack init test
+          pulumi preview --non-interactive 2>&1 | tee preview.log
+
+          grep -q 'random:index:RandomPet' preview.log
+          if grep -i 'warning' preview.log; then
+            echo "FAIL: pulumi emitted warnings (plugin from \$PATH?)" >&2
+            exit 1
+          fi
+          touch $out
+        '';
     in
     {
       lib = pulumi2nixLib;
@@ -67,7 +94,7 @@
           meta.mainProgram = "pulumi2nix-lock";
         };
         default = pulumi2nix-lock;
-        example-random = exampleFor pkgs;
+        example-random = exampleFor pkgs { };
       });
 
       apps = forAllSystems (pkgs: {
@@ -77,35 +104,15 @@
         };
       });
 
-      checks = forAllSystems (pkgs:
-        let example = exampleFor pkgs;
-        in {
-          # Offline end-to-end: preview a stack against a local backend using
-          # only Nix-provided plugins. Fails on any plugin download attempt
-          # (acquisition is disabled) and on any "from $PATH" warning.
-          e2e-preview = pkgs.runCommand "pulumi2nix-e2e-preview"
-            { nativeBuildInputs = [ example ]; } ''
-            export HOME="$TMPDIR"
-            export USER=nixbld
-            export PULUMI_SKIP_UPDATE_CHECK=true
-            export PULUMI_CONFIG_PASSPHRASE=test
-            cp -r ${./examples/random}/. project
-            chmod -R +w project
-            cd project
-
-            mkdir -p "$TMPDIR/state"
-            pulumi login "file://$TMPDIR/state"
-            pulumi stack init test
-            pulumi preview --non-interactive 2>&1 | tee preview.log
-
-            grep -q 'random:index:RandomPet' preview.log
-            if grep -i 'warning: using pulumi' preview.log; then
-              echo "FAIL: plugin resolved from \$PATH instead of plugin store" >&2
-              exit 1
-            fi
-            touch $out
-          '';
-        });
+      checks = forAllSystems (pkgs: {
+        # Default mode: official pulumi release pinned by the lock's `cli`
+        # section — SDK, CLI, and language hosts all at the uv.lock version.
+        e2e-preview = mkPreviewCheck pkgs "e2e-preview" (exampleFor pkgs { });
+        # nixpkgs-CLI mode: pkgs.pulumi + nixpkgs' python language host
+        # linked through the plugin store.
+        e2e-preview-nixpkgs-cli = mkPreviewCheck pkgs "e2e-preview-nixpkgs-cli"
+          (exampleFor pkgs { pulumi = pkgs.pulumi; });
+      });
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {

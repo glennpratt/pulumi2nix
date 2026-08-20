@@ -7,20 +7,18 @@
 # $PULUMI_HOME/plugins/ at startup. Pulumi then sees natively-installed
 # plugins: no "from $PATH" warnings, and with automatic plugin acquisition
 # disabled it can never silently hit the network.
-{ lib, loadLock, fetchPlugin, mkPluginStore, systemToTarget }:
+{ lib, loadLock, fetchPlugin, fetchCli, mkPluginStore, systemToTarget }:
 { pkgs
 , lockFile               # path to pulumi-lock.json (from pulumi2nix-lock)
 , pythonEnv ? null       # e.g. a uv2nix virtualenv; sets PULUMI_PYTHON_CMD
-, pulumi ? pkgs.pulumi   # the CLI to wrap
-, languageHosts ?
-    let # renamed in nixpkgs from pulumi-language-python
-      host = pkgs.pulumiPackages.pulumi-python or pkgs.pulumiPackages.pulumi-language-python;
-    in
-    [{
-      name = "python";
-      inherit (host) version;
-      drv = host;
-    }]
+, pulumi ? null          # explicit CLI derivation. Default: the official
+                         # release pinned in the lock's `cli` section (exact
+                         # SDK/CLI/language-host lockstep), falling back to
+                         # pkgs.pulumi for locks without one.
+, languageHosts ? null   # [{ name, version, drv }] linked into the plugin
+                         # store. Default: none when the bundled CLI already
+                         # carries its language hosts, else nixpkgs' python
+                         # host to accompany pkgs.pulumi.
 , extraResourcePlugins ? [ ] # extra [{ name, version, drv }] beyond the lock
 , name ? "pulumi"
 }:
@@ -28,6 +26,39 @@ let
   lock = loadLock lockFile;
   target = systemToTarget.${pkgs.stdenv.hostPlatform.system}
     or (throw "pulumi2nix: unsupported system ${pkgs.stdenv.hostPlatform.system}");
+
+  bundledCli =
+    if lock ? cli then
+      fetchCli
+        {
+          inherit pkgs target;
+          inherit (lock.cli) version baseURL;
+          hash = lock.cli.hashes.${target} or (throw (
+            "pulumi2nix: no hash for the pulumi CLI v${lock.cli.version} on "
+            + "${target}; re-run pulumi2nix-lock with --platform ${target}"
+          ));
+        }
+    else null;
+
+  cli =
+    if pulumi != null then pulumi
+    else if bundledCli != null then bundledCli
+    else pkgs.pulumi;
+
+  # The bundled release carries language hosts next to the CLI binary, where
+  # Pulumi finds them natively; only external CLIs need store-linked hosts.
+  effectiveLanguageHosts =
+    if languageHosts != null then languageHosts
+    else if pulumi == null && bundledCli != null then [ ]
+    else
+      let # renamed in nixpkgs from pulumi-language-python
+        host = pkgs.pulumiPackages.pulumi-python or pkgs.pulumiPackages.pulumi-language-python;
+      in
+      [{
+        name = "python";
+        inherit (host) version;
+        drv = host;
+      }];
 
   resourcePlugins = lib.mapAttrsToList
     (pluginName: p: {
@@ -46,7 +77,10 @@ let
     lock.plugins
   ++ extraResourcePlugins;
 
-  pluginStore = mkPluginStore { inherit pkgs resourcePlugins languageHosts; };
+  pluginStore = mkPluginStore {
+    inherit pkgs resourcePlugins;
+    languageHosts = effectiveLanguageHosts;
+  };
 in
 pkgs.writeShellApplication {
   inherit name;
@@ -83,11 +117,11 @@ pkgs.writeShellApplication {
     ${lib.optionalString (pythonEnv != null) ''
       export PULUMI_PYTHON_CMD="${pythonEnv}/bin/python"
     ''}
-    exec ${pulumi}/bin/pulumi "$@"
+    exec ${cli}/bin/pulumi "$@"
   '';
 
   # Expose internals for debugging / composition.
   derivationArgs.passthru = {
-    inherit pluginStore resourcePlugins;
+    inherit pluginStore resourcePlugins cli;
   };
 }

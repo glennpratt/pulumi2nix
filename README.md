@@ -31,6 +31,15 @@ and never warns about `$PATH` fallbacks.
    diverge), and records SRI hashes for the plugin tarball on each platform.
    No manual hash copy-pasting, no fake-hash build failures.
 
+   It also pins the official **pulumi CLI release** at the exact `pulumi`
+   SDK version from `uv.lock` (a `cli` section in the lock). That release
+   bundles the CLI together with its language hosts
+   (`pulumi-language-python` et al.), which Pulumi discovers warning-free
+   next to its own binary — so SDK, CLI, and language host can never drift
+   apart. Pass `pulumi = pkgs.pulumi;` to `mkPulumiEnv` to use the nixpkgs
+   CLI instead (the nixpkgs python language host is then linked through the
+   plugin store).
+
 2. Tell Pulumi's Python language host to use the Nix-provided interpreter
    instead of managing a toolchain, in `Pulumi.yaml`:
 

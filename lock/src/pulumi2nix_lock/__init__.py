@@ -55,6 +55,30 @@ def sha256_sri(digest_hex: str) -> str:
 
 
 @dataclass
+class CliSpec:
+    """The official pulumi/pulumi CLI release matching the `pulumi` SDK
+    version in uv.lock. Its tarball bundles the CLI and every language host
+    (pulumi-language-python etc.); binaries next to the CLI are discovered
+    without warnings, so pinning it keeps SDK, CLI, and language host in
+    exact lockstep."""
+
+    version: str
+    hashes: dict[str, str] = field(default_factory=dict)  # platform -> SRI
+
+    @property
+    def base_url(self) -> str:
+        return f"https://github.com/pulumi/pulumi/releases/download/v{self.version}"
+
+    def asset_name(self, platform: str) -> str:
+        # CLI release assets use x64 where provider releases use amd64.
+        return f"pulumi-v{self.version}-{platform.replace('amd64', 'x64')}.tar.gz"
+
+    @property
+    def checksums_url(self) -> str:
+        return f"{self.base_url}/pulumi-{self.version}-checksums.txt"
+
+
+@dataclass
 class PluginSpec:
     """A resource plugin required by a Python package in uv.lock."""
 
@@ -192,7 +216,8 @@ def parse_checksums_txt(text: str) -> dict[str, str]:
     return out
 
 
-def resolve_hashes(spec: PluginSpec, platforms: list[str]) -> None:
+def resolve_hashes(spec: PluginSpec | CliSpec, platforms: list[str]) -> None:
+    label = getattr(spec, "name", "cli")
     checksums: dict[str, str] = {}
     try:
         checksums = parse_checksums_txt(
@@ -201,9 +226,9 @@ def resolve_hashes(spec: PluginSpec, platforms: list[str]) -> None:
     except (urllib.error.URLError, urllib.error.HTTPError):
         pass
     if checksums:
-        log(f"  {spec.name}: using published sha256 checksums file")
+        log(f"  {label}: using published sha256 checksums file")
     else:
-        log(f"  {spec.name}: no usable sha256 checksums, hashing tarballs directly")
+        log(f"  {label}: no usable sha256 checksums, hashing tarballs directly")
 
     for platform in platforms:
         asset = spec.asset_name(platform)
@@ -211,16 +236,23 @@ def resolve_hashes(spec: PluginSpec, platforms: list[str]) -> None:
             spec.hashes[platform] = sha256_sri(checksums[asset])
             continue
         url = f"{spec.base_url}/{asset}"
-        log(f"  {spec.name}: downloading {asset}")
+        log(f"  {label}: downloading {asset}")
         try:
             data = http_get(url)
         except urllib.error.HTTPError as e:
-            log(f"  {spec.name}: WARNING: {url} -> HTTP {e.code}, skipping platform")
+            log(f"  {label}: WARNING: {url} -> HTTP {e.code}, skipping platform")
             continue
         spec.hashes[platform] = sha256_sri(hashlib.sha256(data).hexdigest())
 
 
-def build_lock(specs: list[PluginSpec]) -> dict:
+def resolve_cli_spec(packages: list[dict]) -> CliSpec | None:
+    for pkg in packages:
+        if pkg.get("name") == "pulumi":
+            return CliSpec(version=pkg["version"])
+    return None
+
+
+def build_lock(specs: list[PluginSpec], cli: CliSpec | None) -> dict:
     plugins = {}
     for spec in sorted(specs, key=lambda s: s.name):
         plugins[spec.name] = {
@@ -229,7 +261,14 @@ def build_lock(specs: list[PluginSpec]) -> dict:
             "baseURL": spec.base_url,
             "hashes": dict(sorted(spec.hashes.items())),
         }
-    return {"version": LOCK_FORMAT_VERSION, "plugins": plugins}
+    lock: dict = {"version": LOCK_FORMAT_VERSION, "plugins": plugins}
+    if cli is not None:
+        lock["cli"] = {
+            "version": cli.version,
+            "baseURL": cli.base_url,
+            "hashes": dict(sorted(cli.hashes.items())),
+        }
+    return lock
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -275,7 +314,14 @@ def main(argv: list[str] | None = None) -> int:
         log(f"Resolving hashes for {spec.name} v{spec.version}")
         resolve_hashes(spec, platforms)
 
-    lock = build_lock(specs)
+    cli = resolve_cli_spec(packages)
+    if cli is not None:
+        log(f"Resolving hashes for pulumi CLI v{cli.version}")
+        resolve_hashes(cli, platforms)
+    else:
+        log("No `pulumi` SDK in uv.lock; omitting cli section")
+
+    lock = build_lock(specs, cli)
     args.output.write_text(json.dumps(lock, indent=2) + "\n")
     log(f"Wrote {args.output} ({len(specs)} plugins)")
     return 0

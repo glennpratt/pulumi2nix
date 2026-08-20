@@ -12,5 +12,15 @@
         "linux-arm64": "sha256-8S6Wlyy4tQ8e5nWqU3L87S1MikJ2eKHOrCp4Qt4f0HQ="
       }
     }
+  },
+  "cli": {
+    "version": "3.259.0",
+    "baseURL": "https://github.com/pulumi/pulumi/releases/download/v3.259.0",
+    "hashes": {
+      "darwin-amd64": "sha256-6spMO4J3v6OrBh+jsnDRxmNYoLLmE9qMVYegS3ImxTQ=",
+      "darwin-arm64": "sha256-V8J/F55Sfiz59iuEGkSK9yoCDkSy+07g2b2FVWwAyGQ=",
+      "linux-amd64": "sha256-lLo1esrCPQFHQITEsACY3A97xwzhPzTHd0WSVKX3GOU=",
+      "linux-arm64": "sha256-7cgydGOnIWC7Ns+Cz1Bi2pyKJEKQpwbZmAmI579IaFM="
+    }
   }
 }

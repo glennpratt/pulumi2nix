@@ -53,9 +53,15 @@ Architecture (from `scratch/Pulumi Nix Module for Dependency Management.md`):
 
 ## Phase 2 — Ergonomics
 
-- [ ] Language host handling: silence/pin `pulumi-language-python` (link
-      nixpkgs' language hosts into the plugin store) — partially handled by
-      nixpkgs `pulumi` wrapper already; verify no warnings in fresh env
+- [x] Language host handling (prioritized 2026-08-20): pin CLI + language
+      hosts to the `pulumi` SDK version from uv.lock. Implemented as a `cli`
+      section in pulumi-lock.json → `fetchCli` builds the official
+      pulumi/pulumi release (CLI + all language hosts in one bin dir, found
+      warning-free next to the executable). Default mode for `mkPulumiEnv`;
+      `pulumi = pkgs.pulumi` keeps the nixpkgs CLI + store-linked nixpkgs
+      language host. Both modes have e2e checks that fail on ANY warning.
+      Verified on macOS + Linux VM (pulumi-watch is a Rust binary needing
+      libgcc_s via buildInputs; the Go binaries are static)
 - [ ] Overrides: per-provider URL/repo overrides for community providers
       (pulumiverse etc., `server: github://api.github.com/<org>` already
       handled; add manual escape hatch)
@@ -99,9 +105,9 @@ Architecture (from `scratch/Pulumi Nix Module for Dependency Management.md`):
 
 ## Open questions / risks
 
-- `pulumiPackages.pulumi-python` in nixpkgs (3.255.0) may drift from the
-  `pulumi` Python SDK in uv.lock (3.259.0 currently) — seems tolerant, but a
-  language-host version pin from uv.lock would be tighter (Phase 2).
+- ~~nixpkgs language host may drift from the SDK version~~ resolved: the
+  lock's `cli` section pins the official release at the uv.lock SDK version
+  (default mode); drift only possible in the opt-in nixpkgs-CLI mode.
 - Community providers hosted off `github.com/pulumi` (`server` field in
   pulumi-plugin.json) are handled for `github://api.github.com/<org>` and
   plain https servers, but untested against a real pulumiverse provider.
