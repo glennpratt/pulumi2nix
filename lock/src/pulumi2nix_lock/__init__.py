@@ -39,6 +39,10 @@ DEFAULT_PLATFORMS = [
 
 USER_AGENT = "pulumi2nix-lock/0.1 (+https://github.com/glennpratt/pulumi2nix)"
 
+# Public hash index (hash-only entries; URLs are always derived locally, so
+# a corrupted index can at worst fail a build, never substitute code).
+DEFAULT_INDEX = "https://raw.githubusercontent.com/glennpratt/pulumi-nix-index/main"
+
 
 def log(msg: str) -> None:
     print(msg, file=sys.stderr)
@@ -333,9 +337,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--index",
         metavar="PATH_OR_URL",
+        default=DEFAULT_INDEX,
         help="pulumi-nix-index to consult before hashing tarballs "
              "(repo root as a local path or raw URL); misses fall back to "
-             "downloading and hashing",
+             f"downloading and hashing (default: {DEFAULT_INDEX})",
+    )
+    parser.add_argument(
+        "--no-index",
+        action="store_const",
+        const=None,
+        dest="index",
+        help="skip the index; always download and hash directly",
     )
     args = parser.parse_args(argv)
 
