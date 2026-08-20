@@ -1,0 +1,72 @@
+# Builds the walker as static musl binaries, attests their provenance, and
+# publishes a release tagged walker-<commit sha>. Index repos pin the
+# reusable index-walk.yml workflow to such a sha; it downloads the matching
+# release asset and verifies the attestation before executing it.
+name: walker-release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "walker/**"
+      - ".github/workflows/walker-release.yml"
+      - ".github/workflows/index-walk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            suffix: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            suffix: aarch64-linux
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install musl target
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add ${{ matrix.target }}
+      - name: Test
+        run: cargo test --manifest-path walker/Cargo.toml
+      - name: Build (static)
+        run: |
+          cargo build --release --manifest-path walker/Cargo.toml \
+            --target ${{ matrix.target }}
+          cp "walker/target/${{ matrix.target }}/release/pulumi2nix-index" \
+             "pulumi2nix-index-${{ matrix.suffix }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulumi2nix-index-${{ matrix.suffix }}
+          path: pulumi2nix-index-${{ matrix.suffix }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: pulumi2nix-index-*
+      - name: Publish release named after the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "walker-${GITHUB_SHA}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "walker @ ${GITHUB_SHA:0:12}" \
+            --notes "Attested static walker binaries built from ${GITHUB_SHA}. Verify with: gh attestation verify <file> --repo ${GITHUB_REPOSITORY}" \
+            pulumi2nix-index-*

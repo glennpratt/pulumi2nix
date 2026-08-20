@@ -1,8 +1,10 @@
 # Reusable workflow for pulumi-nix-index repos. The caller pins this file by
-# SHA (`uses: glennpratt/pulumi2nix/.github/workflows/index-walk.yml@<sha>`),
-# and github.job_workflow_sha makes the walker code check out at that same
-# pinned revision — one pin governs both workflow logic and code. The walker
-# is stdlib-only Python, so index CI needs no Nix, no uv, no installs.
+# SHA (`uses: glennpratt/pulumi2nix/.github/workflows/index-walk.yml@<sha>`);
+# github.job_workflow_sha resolves to that same pin, and the job downloads
+# the walker release built from exactly that commit (tag walker-<sha>),
+# verifying its build provenance attestation before executing it. One pin
+# governs the workflow logic AND the walker binary. Pin only SHAs that have
+# a walker release (cut automatically by walker-release.yml on main).
 name: index-walk
 
 on:
@@ -32,15 +34,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4 # the caller's index repo
 
-      - uses: actions/checkout@v4
-        with:
-          repository: glennpratt/pulumi2nix
-          ref: ${{ github.job_workflow_sha }}
-          path: .pulumi2nix
+      - name: Fetch and verify the attested walker (pinned by workflow SHA)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WALKER_REPO: glennpratt/pulumi2nix
+          PIN: ${{ github.job_workflow_sha }}
+        run: |
+          gh release download "walker-${PIN}" --repo "$WALKER_REPO" \
+            --pattern "pulumi2nix-index-x86_64-linux" \
+            --output pulumi2nix-index || {
+              echo "::error::no walker release for ${PIN} — pin index-walk.yml to a sha that has one (see ${WALKER_REPO} releases)"; exit 1; }
+          gh attestation verify pulumi2nix-index --repo "$WALKER_REPO" \
+            --format json > attestation.json
+          # Belt and braces: the attested provenance must reference the
+          # pinned commit itself, not merely any commit of the repo.
+          jq -e --arg sha "$PIN" 'tostring | contains($sha)' attestation.json > /dev/null || {
+            echo "::error::attestation does not reference pinned sha ${PIN}"; exit 1; }
+          chmod +x pulumi2nix-index
+          rm attestation.json
 
       - name: Walk (breadth-first backfill within budget)
-        env:
-          PYTHONPATH: .pulumi2nix/lock/src
         run: |
           ARGS=(walk --index-dir . --providers-file providers.txt
                 --max-artifacts "${{ inputs.max-artifacts }}"
@@ -48,15 +61,13 @@ jobs:
           if [ -n "${{ inputs.provider }}" ]; then
             ARGS+=(--provider "${{ inputs.provider }}")
           fi
-          python3 -m pulumi2nix_lock.index "${ARGS[@]}"
+          ./pulumi2nix-index "${ARGS[@]}"
 
       - name: Verify (re-witness a random sample of existing entries)
         id: verify
         continue-on-error: true
-        env:
-          PYTHONPATH: .pulumi2nix/lock/src
         run: |
-          python3 -m pulumi2nix_lock.index verify --index-dir . \
+          ./pulumi2nix-index verify --index-dir . \
             --sample "${{ inputs.verify-sample }}"
 
       - name: Commit new entries (and any conflict reports)

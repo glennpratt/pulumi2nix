@@ -4,11 +4,14 @@ Copy these files into a fresh **data-only** repository (e.g.
 `glennpratt/pulumi-nix-index`) to run a Pulumi provider hash index. The repo
 holds no code — `walk.yml` is a ~10-line stub calling
 [pulumi2nix](https://github.com/glennpratt/pulumi2nix)'s reusable
-`index-walk.yml` workflow pinned by SHA; via `github.job_workflow_sha` that
-one pin also checks out the walker code at the same revision (stdlib-only
-Python — index CI needs no Nix, no uv, no installs). This repo's git history
-is therefore a pure audit log: every commit is either new hash entries or a
-drift alarm.
+`index-walk.yml` workflow pinned by SHA. Via `github.job_workflow_sha`, that
+one pin also selects the walker binary: the workflow downloads the static
+Rust walker from pulumi2nix's `walker-<sha>` release for exactly that
+commit and verifies its build-provenance attestation
+(`gh attestation verify`) before executing it. Pin only SHAs that have a
+walker release (cut automatically on pushes to main). This repo's git
+history is therefore a pure audit log: every commit is either new hash
+entries or a drift alarm.
 
 Layout:
 

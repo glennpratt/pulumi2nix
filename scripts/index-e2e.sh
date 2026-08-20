@@ -10,19 +10,31 @@
 #   release history (both covered, newest-first, balanced depth, budget
 #   respected).
 # Phase 3 — time limit: --max-seconds 0 must hash exactly nothing.
+#
+# WALKER_CMD overrides the walker under test (default: the release build of
+# the Rust walker, built on demand) — the same contract once validated the
+# original Python implementation.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-export PYTHONPATH="$root/lock/src"
 golden="$root/examples/random/pulumi-lock.json"
+
+if [ -z "${WALKER_CMD:-}" ]; then
+  bin="$root/walker/target/release/pulumi2nix-index"
+  if [ ! -x "$bin" ]; then
+    echo "==> building walker (release)"
+    cargo build --release --manifest-path "$root/walker/Cargo.toml"
+  fi
+  WALKER_CMD="$bin"
+fi
+walker() { $WALKER_CMD "$@"; }
 
 # --- Phase 1: fidelity against the committed golden lock --------------------
 version=$(python3 -c "import json; print(json.load(open('$golden'))['plugins']['random']['version'])")
 echo "==> phase 1: walking random@$version (golden fidelity)"
-python3 -m pulumi2nix_lock.index walk \
-  --index-dir "$tmp/golden" --provider "random@$version" --max-artifacts 8
+walker walk --index-dir "$tmp/golden" --provider "random@$version" --max-artifacts 8
 
 python3 - "$golden" "$tmp/golden" "$version" <<'PY'
 import json, sys
@@ -41,17 +53,29 @@ PY
 # --- Phase 2: breadth-first over two providers, budgeted + time-limited -----
 BUDGET=5
 echo "==> phase 2: BFS walk of random+tls (budget $BUDGET artifacts, 300s, linux-amd64 only)"
-python3 -m pulumi2nix_lock.index walk \
+walker walk \
   --index-dir "$tmp/bfs" --provider random --provider tls \
   --platform linux-amd64 --max-artifacts "$BUDGET" --max-seconds 300 \
   2> >(tee "$tmp/bfs.log" >&2)
 
 python3 - "$tmp/bfs" "$BUDGET" "$tmp/bfs.log" <<'PY'
-import json, re, sys
-from pulumi2nix_lock.index import list_versions
+import json, re, subprocess, sys
 index_dir, budget, log_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 
 def vkey(v): return tuple(int(x) for x in v.split("."))
+
+def latest_release(name):
+    out = subprocess.run(
+        ["git", "ls-remote", "--tags", f"https://github.com/pulumi/pulumi-{name}"],
+        check=True, capture_output=True, text=True, timeout=120).stdout
+    tags = set()
+    for line in out.splitlines():
+        ref = line.split()[-1].removesuffix("^{}")
+        m = re.fullmatch(r"refs/tags/v(\d+)\.(\d+)\.(\d+)", ref)
+        if m:
+            tags.add(tuple(int(x) for x in m.groups()))
+    return ".".join(map(str, max(tags)))
+
 covered = {}
 for name in ("random", "tls"):
     shard = json.load(open(f"{index_dir}/index/{name}.json"))
@@ -60,7 +84,7 @@ for name in ("random", "tls"):
          if e["hashes"].get("linux-amd64") is not None),
         key=vkey, reverse=True)
     assert covered[name], f"breadth violated: no {name} versions covered"
-    latest = list_versions(name)[0]
+    latest = latest_release(name)
     assert covered[name][0] == latest, \
         f"rank-0 violated: {name} newest covered {covered[name][0]} != latest release {latest}"
 
@@ -76,7 +100,7 @@ PY
 
 # --- Phase 3: a zero time budget hashes exactly nothing ---------------------
 echo "==> phase 3: --max-seconds 0 walks nothing"
-python3 -m pulumi2nix_lock.index walk \
+walker walk \
   --index-dir "$tmp/bfs" --provider random --provider tls \
   --platform linux-amd64 --max-artifacts 100 --max-seconds 0 \
   2> >(tee "$tmp/zero.log" >&2)

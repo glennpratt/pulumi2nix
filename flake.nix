@@ -91,6 +91,16 @@
           build-system = [ pkgs.python3Packages.hatchling ];
           meta.mainProgram = "pulumi2nix-lock";
         };
+        # The index walker (async Rust). GHA index repos consume it as an
+        # attested release binary (walker-release.yml); this package serves
+        # local use and `nix flake check` (cargo tests run in checkPhase).
+        pulumi2nix-index = pkgs.rustPlatform.buildRustPackage {
+          pname = "pulumi2nix-index";
+          version = "0.1.0";
+          src = ./walker;
+          cargoLock.lockFile = ./walker/Cargo.lock;
+          meta.mainProgram = "pulumi2nix-index";
+        };
         default = pulumi2nix-lock;
         example-random = exampleFor pkgs { };
       });
@@ -102,14 +112,15 @@
         };
         pulumi2nix-index = {
           type = "app";
-          program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.pulumi2nix-lock}/bin/pulumi2nix-index";
+          program = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.pulumi2nix-index;
         };
       });
 
       checks = forAllSystems (pkgs: {
-        # Hermetic walker tests: BFS ordering, budgets, append-only resume,
-        # absent-asset nulls, drift detection, lock-tool fast path.
-        walker-tests = pkgs.runCommand "pulumi2nix-walker-tests"
+        # Rust walker: building the package runs its unit + wiremock tests.
+        walker = self.packages.${pkgs.stdenv.hostPlatform.system}.pulumi2nix-index;
+        # Python lock tool: index fast-path consumption tests.
+        lock-tests = pkgs.runCommand "pulumi2nix-lock-tests"
           { nativeBuildInputs = [ pkgs.python3 ]; } ''
           cd ${./lock}
           PYTHONPATH=src python3 -m unittest discover -s tests -v

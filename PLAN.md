@@ -82,7 +82,13 @@ new releases are automatically rank 0. Walk is append-only; `verify`
 re-hashes random samples continuously and records drift under conflicts/
 (loud failure, never a silent update).
 
-- [x] `pulumi2nix-index` CLI (walk + verify) in lock/, exposed as flake app
+- [x] `pulumi2nix-index` CLI (walk + verify), exposed as flake app
+      (2026-08-20: rewritten in async Rust under `walker/` — tokio +
+      reqwest, tarballs stream-hashed concurrently per version, never
+      buffered; CLI/log/shard-format compatible with the original Python
+      walker, which is retired. Unit tests + wiremock behavior tests in the
+      crate; scripts/index-e2e.sh doubles as the cross-implementation
+      contract test and passed unchanged against the Rust binary)
 - [x] Shards `index/<provider>.json` (version → platform → SRI, null=absent)
 - [x] `pulumi2nix-lock --index <path|url>` fast path, direct-hash fallback
       (tested: identical output to slow path for pulumi-random)
@@ -90,8 +96,14 @@ re-hashes random samples continuously and records drift under conflicts/
       single-writer concurrency, drift → auto-filed issue, pinned rev)
 - [x] Reusable workflow `.github/workflows/index-walk.yml` in THIS repo;
       index repo's walk.yml is a ~10-line stub pinning it by SHA — and
-      `github.job_workflow_sha` checks out the walker at that same pin, so
-      one SHA governs workflow logic + code (no Nix/uv needed in index CI)
+      `github.job_workflow_sha` selects the walker at that same pin, so
+      one SHA governs workflow logic + binary (no Nix/uv/rust in index CI)
+- [x] Attested releases over ghcr (decision): walker-release.yml builds
+      static musl binaries (x86_64 + aarch64 linux), attests provenance
+      (actions/attest-build-provenance), publishes release `walker-<sha>`;
+      index-walk.yml downloads the asset for its pinned sha, runs
+      `gh attestation verify` AND asserts the provenance references the
+      pinned commit before executing
 - [x] Tests before repo creation:
       - hermetic walker unit tests (`lock/tests/`, in `nix flake check`):
         BFS order, budget stop, append-only resume, absent-asset nulls,
