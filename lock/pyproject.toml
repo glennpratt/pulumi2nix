@@ -10,6 +10,7 @@ dependencies = []
 
 [project.scripts]
 pulumi2nix-lock = "pulumi2nix_lock:main"
+pulumi2nix-index = "pulumi2nix_lock.index:main"
 
 [build-system]
 requires = ["hatchling"]

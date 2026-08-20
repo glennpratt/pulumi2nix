@@ -54,6 +54,16 @@ def sha256_sri(digest_hex: str) -> str:
     return "sha256-" + base64.b64encode(bytes.fromhex(digest_hex)).decode()
 
 
+def sha256_of_url(url: str) -> str:
+    """Stream a URL through sha256 without buffering it in memory or on disk."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(req) as resp:
+        while chunk := resp.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 @dataclass
 class CliSpec:
     """The official pulumi/pulumi CLI release matching the `pulumi` SDK
@@ -245,6 +255,31 @@ def resolve_hashes(spec: PluginSpec | CliSpec, platforms: list[str]) -> None:
         spec.hashes[platform] = sha256_sri(hashlib.sha256(data).hexdigest())
 
 
+def index_hashes(index: str, spec: PluginSpec, platforms: list[str]) -> dict[str, str]:
+    """Look up a plugin's hashes in a pulumi-nix-index (local path or URL).
+
+    Only applies to providers hosted under the official github.com/pulumi
+    naming convention (the index derives URLs the same way); plugins with a
+    `server` override always take the slow path. Returns whatever subset of
+    platforms the index knows (null entries — assets absent upstream — are
+    excluded). The index stores hashes only; URLs are still derived locally,
+    so a corrupted index can at worst fail a build, never substitute code.
+    """
+    if spec.server:
+        return {}
+    shard_ref = f"index/{spec.name}.json"
+    try:
+        if index.startswith(("http://", "https://")):
+            raw = http_get(f"{index.rstrip('/')}/{shard_ref}")
+        else:
+            raw = (Path(index) / shard_ref).read_bytes()
+        shard = json.loads(raw)
+    except (OSError, urllib.error.URLError, urllib.error.HTTPError, ValueError):
+        return {}
+    hashes = shard.get("entries", {}).get(spec.version, {}).get("hashes", {})
+    return {p: h for p, h in hashes.items() if p in platforms and h is not None}
+
+
 def resolve_cli_spec(packages: list[dict]) -> CliSpec | None:
     for pkg in packages:
         if pkg.get("name") == "pulumi":
@@ -295,6 +330,13 @@ def main(argv: list[str] | None = None) -> int:
         metavar="TARGET",
         help=f"platform target(s) to lock (default: {' '.join(DEFAULT_PLATFORMS)})",
     )
+    parser.add_argument(
+        "--index",
+        metavar="PATH_OR_URL",
+        help="pulumi-nix-index to consult before hashing tarballs "
+             "(repo root as a local path or raw URL); misses fall back to "
+             "downloading and hashing",
+    )
     args = parser.parse_args(argv)
 
     if not args.uv_lock.exists():
@@ -312,7 +354,14 @@ def main(argv: list[str] | None = None) -> int:
 
     for spec in specs:
         log(f"Resolving hashes for {spec.name} v{spec.version}")
-        resolve_hashes(spec, platforms)
+        if args.index:
+            spec.hashes.update(index_hashes(args.index, spec, platforms))
+            missing = [p for p in platforms if p not in spec.hashes]
+            if not missing:
+                log(f"  {spec.name}: all platforms served by index")
+                continue
+            log(f"  {spec.name}: index missing {' '.join(missing)}, resolving directly")
+        resolve_hashes(spec, [p for p in platforms if p not in spec.hashes])
 
     cli = resolve_cli_spec(packages)
     if cli is not None:

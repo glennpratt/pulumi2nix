@@ -69,13 +69,30 @@ Architecture (from `scratch/Pulumi Nix Module for Dependency Management.md`):
 - [ ] Flake template (`nix flake init -t pulumi2nix#python`)
 - [ ] Non-uv Python fallback? (requirements.txt) — probably out of scope
 
-## Phase 3 — Central index (separate repo, `pulumi-nix-index`)
+## Phase 3 — Central index (data-only repo `pulumi-nix-index`; tools live HERE)
 
-- [ ] Static `index.json`: name → version → platform → SRI hash
-- [ ] Nightly GitHub Action scraping official `pulumi/pulumi-*` releases
-- [ ] `lib.lookupHash` flake API; pulumi2nix consults index before/instead of
-      per-repo `pulumi-lock.json`
-- [ ] Per-repo lock remains the fallback for community/unindexed providers
+Decisions (2026-08-20): the walker/tools live in pulumi2nix (shared code with
+the lock tool; pinned-rev invocation is the "slowly changing artifact"); the
+index repo is data-only so its git history is a pure audit log. Entries are
+hash-only — consumers always derive URLs locally, so a corrupted index can
+at worst fail builds, never substitute code. Backfill is a breadth-first,
+budgeted, stateless walk (frontier = ls-remote tags minus shards): every
+provider's rank-0 version before any rank-1, demand lane jumps the queue,
+new releases are automatically rank 0. Walk is append-only; `verify`
+re-hashes random samples continuously and records drift under conflicts/
+(loud failure, never a silent update).
+
+- [x] `pulumi2nix-index` CLI (walk + verify) in lock/, exposed as flake app
+- [x] Shards `index/<provider>.json` (version → platform → SRI, null=absent)
+- [x] `pulumi2nix-lock --index <path|url>` fast path, direct-hash fallback
+      (tested: identical output to slow path for pulumi-random)
+- [x] Index repo template in `templates/index-repo/` (cron workflow with
+      single-writer concurrency, drift → auto-filed issue, pinned rev)
+- [ ] Create the actual `pulumi-nix-index` repo from the template + first
+      backfill runs; set branch protection (bot-only pushes)
+- [ ] Default `--index` URL in pulumi2nix-lock once the repo exists
+- [ ] Later: eval-time flake input consumption (no per-repo lock for indexed
+      providers); shard-lazy readFile to keep eval cheap
 
 ## Phase 4 — Other language bridges (future)
 

@@ -100,6 +100,10 @@
           type = "app";
           program = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.pulumi2nix-lock;
         };
+        pulumi2nix-index = {
+          type = "app";
+          program = "${self.packages.${pkgs.stdenv.hostPlatform.system}.pulumi2nix-lock}/bin/pulumi2nix-index";
+        };
       });
 
       checks = forAllSystems (pkgs: {

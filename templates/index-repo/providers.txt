@@ -1,0 +1,24 @@
+# Official pulumi/pulumi-<name> providers covered by the cron walk.
+# One name per line; the demand lane (workflow_dispatch) can index anything
+# else ad hoc. Ordering here is not priority — the walk is breadth-first by
+# version rank across all providers.
+aws
+aws-native
+azure-native
+azuread
+gcp
+kubernetes
+cloudflare
+datadog
+docker
+github
+gitlab
+linode
+mysql
+postgresql
+random
+snowflake
+tls
+vault
+command
+eks

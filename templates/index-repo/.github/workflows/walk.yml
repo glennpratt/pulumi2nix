@@ -1,0 +1,67 @@
+name: walk
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: "Provider to index ahead of the queue (demand lane)"
+        required: false
+
+# Single writer: cron and demand runs queue behind each other.
+concurrency:
+  group: index-writer
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  # The walker is pinned; bumping this is a deliberate, reviewed change.
+  PULUMI2NIX_REV: "REPLACE_WITH_PINNED_REV"
+
+jobs:
+  walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Walk (breadth-first backfill within budget)
+        run: |
+          ARGS=(walk --index-dir . --providers-file providers.txt
+                --max-artifacts 800 --max-seconds 3600)
+          if [ -n "${{ inputs.provider }}" ]; then
+            ARGS+=(--provider "${{ inputs.provider }}")
+          fi
+          nix run "github:glennpratt/pulumi2nix/${PULUMI2NIX_REV}#pulumi2nix-index" -- "${ARGS[@]}"
+
+      - name: Verify (re-witness a random sample of existing entries)
+        id: verify
+        continue-on-error: true
+        run: |
+          nix run "github:glennpratt/pulumi2nix/${PULUMI2NIX_REV}#pulumi2nix-index" -- \
+            verify --index-dir . --sample 50
+
+      - name: Commit new entries (and any conflict reports)
+        run: |
+          git config user.name "pulumi-nix-index bot"
+          git config user.email "actions@github.com"
+          git add index/ conflicts/ 2>/dev/null || git add index/
+          git diff --cached --quiet && exit 0
+          git commit -m "walk: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
+
+      - name: Raise the alarm on drift
+        if: steps.verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "DRIFT: released artifact no longer matches its recorded hash" \
+            --body "verify failed in run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — see conflicts/ in the latest commit. Existing index entries were NOT modified."
+          exit 1
