@@ -114,9 +114,12 @@ re-hashes random samples continuously and records drift under conflicts/
       - language-agnostic network e2e (`scripts/index-e2e.sh`): walks the
         golden version from examples/random/pulumi-lock.json into a temp
         index and asserts byte-identical hashes
-- [ ] Create the actual `pulumi-nix-index` repo from the template + first
-      backfill runs; set branch protection (bot-only pushes)
-- [ ] Default `--index` URL in pulumi2nix-lock once the repo exists
+- [x] Create the actual `pulumi-nix-index` repo from the template
+      (github.com/glennpratt/pulumi-nix-index, pinned to 68bc7f4; stub
+      exposes budget inputs on workflow_dispatch) — first walk + branch
+      protection (bot-only pushes) still pending
+- [x] Default `--index` URL in pulumi2nix-lock (raw.githubusercontent URL;
+      --no-index opts out)
 - [ ] Later: eval-time flake input consumption (no per-repo lock for indexed
       providers); shard-lazy readFile to keep eval cheap
 
