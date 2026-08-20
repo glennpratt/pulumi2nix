@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "plugins": {
+    "random": {
+      "version": "4.21.1",
+      "pythonPackage": "pulumi-random",
+      "baseURL": "https://github.com/pulumi/pulumi-random/releases/download/v4.21.1",
+      "hashes": {
+        "darwin-amd64": "sha256-x9aAtTOKkgyQ4xlfUklKQ33AT6LSSamxTEesI8Jtpo0=",
+        "darwin-arm64": "sha256-tI+qrgoGlT6iIW0mnukLREWpPFO25ifPdtN4+EJkxLY=",
+        "linux-amd64": "sha256-yiKi71mReXdxMOa/X/D6yxWijaOrBqNmNOfP87ARhwg=",
+        "linux-arm64": "sha256-8S6Wlyy4tQ8e5nWqU3L87S1MikJ2eKHOrCp4Qt4f0HQ="
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+[project]
+name = "pulumi2nix-example-random"
+version = "0.1.0"
+description = "pulumi2nix end-to-end example using pulumi-random"
+requires-python = ">=3.11"
+dependencies = [
+    "pulumi>=3,<4",
+    "pulumi-random>=4,<5",
+]
+
+[tool.uv]
+package = false

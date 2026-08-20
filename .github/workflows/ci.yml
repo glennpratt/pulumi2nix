@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v16
+      - name: Build pulumi2nix-lock
+        run: nix build .#pulumi2nix-lock
+      - name: Flake check (offline e2e pulumi preview)
+        run: nix flake check -L
