@@ -118,8 +118,12 @@ re-hashes random samples continuously and records drift under conflicts/
         index and asserts byte-identical hashes
 - [x] Create the actual `pulumi-nix-index` repo from the template
       (github.com/glennpratt/pulumi-nix-index, pinned to 68bc7f4; stub
-      exposes budget inputs on workflow_dispatch) — first walk + branch
-      protection (bot-only pushes) still pending
+      exposes budget inputs on workflow_dispatch); first walk proven
+      2026-08-20 (run 32420628032: OIDC pin discovery, attestation
+      verified, demand lane random@4.21.1 + BFS rank-0 within budget 8,
+      verify re-witnessed all entries, bot committed shard; lock tool's
+      default --index served all platforms, identical to committed lock).
+      Branch protection (bot-only pushes) still pending — user decision
 - [x] Default `--index` URL in pulumi2nix-lock (raw.githubusercontent URL;
       --no-index opts out)
 - [ ] Later: eval-time flake input consumption (no per-repo lock for indexed
