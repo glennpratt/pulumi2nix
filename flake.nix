@@ -72,6 +72,7 @@
           pulumi preview --non-interactive 2>&1 | tee preview.log
 
           grep -q 'random:index:RandomPet' preview.log
+          grep -q 'command:local:Command' preview.log
           if grep -i 'warning' preview.log; then
             echo "FAIL: pulumi emitted warnings (plugin from \$PATH?)" >&2
             exit 1

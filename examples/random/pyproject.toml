@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "pulumi>=3,<4",
     "pulumi-random>=4,<5",
+    "pulumi-command>=1,<2",
 ]
 
 [tool.uv]

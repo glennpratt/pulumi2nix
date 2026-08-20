@@ -1,6 +1,17 @@
 {
   "version": 1,
   "plugins": {
+    "command": {
+      "version": "1.2.1",
+      "pythonPackage": "pulumi-command",
+      "baseURL": "https://github.com/pulumi/pulumi-command/releases/download/v1.2.1",
+      "hashes": {
+        "darwin-amd64": "sha256-J9RhlolWl6Njos7pbmo2ke2nDNUp/LGD47Poxc/XNhc=",
+        "darwin-arm64": "sha256-I4GOD24g5KxUrk9p+8gGZf41oZdIXctncwPLQYXUpuA=",
+        "linux-amd64": "sha256-cTd5mdHaOfVOlNn+KVD2u5oKCQpXcJSGY3M5fcrS6AA=",
+        "linux-arm64": "sha256-0pTuNsyXSZvIxdeQXGr/60t2ivUMJtauqpqPONBvpVg="
+      }
+    },
     "random": {
       "version": "4.21.1",
       "pythonPackage": "pulumi-random",
