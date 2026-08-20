@@ -78,6 +78,16 @@
           fi
           touch $out
         '';
+      # The index walker (async Rust). GHA index repos consume it as an
+      # attested release binary (walker-release.yml); the plain package
+      # serves local use and `nix flake check` (cargo tests in checkPhase).
+      walkerFor = pkgs': pkgs'.rustPlatform.buildRustPackage {
+        pname = "pulumi2nix-index";
+        version = "0.1.0";
+        src = ./walker;
+        cargoLock.lockFile = ./walker/Cargo.lock;
+        meta.mainProgram = "pulumi2nix-index";
+      };
     in
     {
       lib = pulumi2nixLib;
@@ -91,18 +101,13 @@
           build-system = [ pkgs.python3Packages.hatchling ];
           meta.mainProgram = "pulumi2nix-lock";
         };
-        # The index walker (async Rust). GHA index repos consume it as an
-        # attested release binary (walker-release.yml); this package serves
-        # local use and `nix flake check` (cargo tests run in checkPhase).
-        pulumi2nix-index = pkgs.rustPlatform.buildRustPackage {
-          pname = "pulumi2nix-index";
-          version = "0.1.0";
-          src = ./walker;
-          cargoLock.lockFile = ./walker/Cargo.lock;
-          meta.mainProgram = "pulumi2nix-index";
-        };
+        pulumi2nix-index = walkerFor pkgs;
         default = pulumi2nix-lock;
         example-random = exampleFor pkgs { };
+      } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+        # Fully static (musl) walker for the attested GHA release — built
+        # with Nix, no rustup/apt toolchains (see walker-release.yml).
+        pulumi2nix-index-static = walkerFor pkgs.pkgsStatic;
       });
 
       apps = forAllSystems (pkgs: {

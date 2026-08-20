@@ -98,9 +98,11 @@ re-hashes random samples continuously and records drift under conflicts/
       index repo's walk.yml is a ~10-line stub pinning it by SHA — and
       `github.job_workflow_sha` selects the walker at that same pin, so
       one SHA governs workflow logic + binary (no Nix/uv/rust in index CI)
-- [x] Attested releases over ghcr (decision): walker-release.yml builds
-      static musl binaries (x86_64 + aarch64 linux), attests provenance
-      (actions/attest-build-provenance), publishes release `walker-<sha>`;
+- [x] Attested releases over ghcr (decision): walker-release.yml builds a
+      static musl binary via `nix build .#pulumi2nix-index-static`
+      (pkgsStatic — no rustup/apt; x86_64-linux only, since the walker runs
+      solely on index-repo GHA runners and hashes all target platforms from
+      anywhere), attests provenance, publishes release `walker-<sha>`;
       index-walk.yml downloads the asset for its pinned sha, runs
       `gh attestation verify` AND asserts the provenance references the
       pinned commit before executing
