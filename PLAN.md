@@ -78,9 +78,15 @@ hash-only — consumers always derive URLs locally, so a corrupted index can
 at worst fail builds, never substitute code. Backfill is a breadth-first,
 budgeted, stateless walk (frontier = ls-remote tags minus shards): every
 provider's rank-0 version before any rank-1, demand lane jumps the queue,
-new releases are automatically rank 0. Walk is append-only; `verify`
-re-hashes random samples continuously and records drift under conflicts/
-(loud failure, never a silent update).
+new releases are automatically rank 0. Recorded hashes are never
+rewritten, and no status code is ever treated as a permanent fact
+(2026-08-21): a 404 stamps a write-once `misses` timestamp used only for
+scheduling — fresh misses retry at natural rank (mid-publish releases),
+stale ones are demoted behind all fresh work — while 403/429/5xx record
+nothing (GitHub throttles speak 403; concluding absence from them would
+poison the index). Only successful hashes charge the artifact budget.
+`verify` re-hashes random samples continuously and records drift under
+conflicts/ (loud failure, never a silent update).
 
 - [x] `pulumi2nix-index` CLI (walk + verify), exposed as flake app
       (2026-08-20: rewritten in async Rust under `walker/` — tokio +

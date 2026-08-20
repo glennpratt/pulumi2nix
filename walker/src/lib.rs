@@ -10,9 +10,17 @@
 //! - Stateless walk: frontier = ls-remote tags minus existing shards.
 //! - Breadth-first: all providers' rank-0 versions before any rank-1;
 //!   `name@version` pins jump the queue (rank -1).
-//! - Budgeted by artifact count and wall clock; shards saved per version.
-//! - Append-only walk; drift detection lives in `verify` (conflicts/ +
-//!   exit 3, never a silent update).
+//! - Budgeted by artifact count (successful hashes only) and wall clock;
+//!   shards saved per version.
+//! - No permanent conclusions from status codes: recorded hashes are never
+//!   rewritten (drift detection lives in `verify`: conflicts/ + exit 3,
+//!   never a silent update), and absence is never recorded as fact — a 404
+//!   stamps a write-once `misses` timestamp used only for scheduling.
+//!   Fresh misses retry at natural rank (a release may still be mid-
+//!   publish); misses older than MISS_GRACE are demoted behind all fresh
+//!   work, so permanent gaps cost one cheap request per deep-backfill pass
+//!   instead of clogging rank 0. Transport/throttle errors (403/429/5xx)
+//!   record nothing at all.
 //! - Async where it pays: platform tarballs of a version are streamed and
 //!   hashed concurrently, never buffered to disk or memory.
 
@@ -27,6 +35,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub const SHARD_FORMAT_VERSION: u32 = 1;
+
+/// How long after a first 404 a version keeps retrying at natural rank
+/// (covers releases whose assets are still uploading when the tag appears).
+pub const MISS_GRACE_SECS: i64 = 24 * 3600;
+
+/// Rank offset that pushes stale-missing versions behind all fresh work.
+pub const MISS_DEMOTION: i64 = 1_000_000;
 
 pub const DEFAULT_PLATFORMS: [&str; 4] = [
     "linux-amd64",
@@ -99,9 +114,11 @@ pub fn parse_checksums_txt(text: &str) -> BTreeMap<String, String> {
 }
 
 pub enum FetchError {
-    /// The asset does not exist upstream (HTTP 403/404) — recorded as null.
-    Missing(u16),
-    /// Transient/other failure — leave the platform unrecorded, retry next run.
+    /// HTTP 404 — the asset looks unpublished. Never treated as fact: it
+    /// stamps a miss timestamp used only to deprioritize retries.
+    Missing,
+    /// Anything else (403 throttles, 429, 5xx, transport) — says nothing
+    /// about the asset; record nothing, retry next run.
     Other(String),
 }
 
@@ -113,8 +130,8 @@ pub async fn sha256_of_url(client: &reqwest::Client, url: &str) -> Result<String
         .await
         .map_err(|e| FetchError::Other(e.to_string()))?;
     let status = resp.status();
-    if status == 403 || status == 404 {
-        return Err(FetchError::Missing(status.as_u16()));
+    if status == 404 {
+        return Err(FetchError::Missing);
     }
     if !status.is_success() {
         return Err(FetchError::Other(format!("HTTP {status}")));
@@ -182,8 +199,22 @@ pub async fn list_versions(base: &str, provider: &str) -> Result<Vec<String>> {
 pub struct Entry {
     #[serde(rename = "observedAt")]
     pub observed_at: Option<String>,
+    /// platform -> SRI. Option only to tolerate legacy null entries (an
+    /// earlier format recorded 404s as null); the walker never writes None
+    /// and treats a legacy null as "missing, retryable".
     #[serde(default)]
     pub hashes: BTreeMap<String, Option<String>>,
+    /// platform -> RFC3339 timestamp of the first observed 404. Written
+    /// once, removed when the asset appears; scheduling metadata only —
+    /// never a statement that the asset doesn't exist.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub misses: BTreeMap<String, String>,
+}
+
+impl Entry {
+    pub fn has_hash(&self, platform: &str) -> bool {
+        matches!(self.hashes.get(platform), Some(Some(_)))
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -225,9 +256,27 @@ impl Shard {
 
     pub fn is_complete(&self, version: &str, platforms: &[String]) -> bool {
         match self.entries.get(version) {
-            Some(e) => platforms.iter().all(|p| e.hashes.contains_key(p)),
+            Some(e) => platforms.iter().all(|p| e.has_hash(p)),
             None => false,
         }
+    }
+
+    /// A version is demoted (retried only behind all fresh work) when every
+    /// platform still lacking a hash 404'd longer ago than MISS_GRACE — by
+    /// then a mid-publish release would have settled, so what's left is
+    /// almost certainly a platform that was never shipped. Any never-tried
+    /// or freshly-missed platform keeps the version at its natural rank.
+    pub fn is_demoted(&self, version: &str, platforms: &[String],
+                      now: &chrono::DateTime<chrono::Utc>) -> bool {
+        let Some(entry) = self.entries.get(version) else { return false };
+        let mut unhashed = platforms.iter().filter(|p| !entry.has_hash(p));
+        unhashed.all(|p| match entry.misses.get(p) {
+            Some(ts) => match chrono::DateTime::parse_from_rfc3339(ts) {
+                Ok(t) => (*now - t.with_timezone(&chrono::Utc)).num_seconds() > MISS_GRACE_SECS,
+                Err(_) => false, // unparseable: retry at natural rank
+            },
+            None => false,
+        })
     }
 }
 
@@ -281,12 +330,15 @@ impl Budget {
 }
 
 /// Frontier of incomplete (rank, provider, version), breadth-first: every
-/// provider's rank N before any rank N+1; pinned versions get rank -1.
+/// provider's rank N before any rank N+1. Pinned versions get rank -1 and
+/// are never demoted (an explicit request retries immediately); versions
+/// whose remaining gaps are all stale misses sink behind all fresh work.
 pub fn build_frontier(
     pinned: &[(String, String)],
     enumerated: &[(String, Vec<String>)],
     shards: &IndexMap<String, Shard>,
     platforms: &[String],
+    now: &chrono::DateTime<chrono::Utc>,
 ) -> Vec<(i64, String, String)> {
     let mut frontier: Vec<(i64, String, String)> = Vec::new();
     for (provider, version) in pinned {
@@ -296,8 +348,14 @@ pub fn build_frontier(
     }
     for (provider, versions) in enumerated {
         for (rank, version) in versions.iter().enumerate() {
-            if !shards[provider].is_complete(version, platforms) {
-                frontier.push((rank as i64, provider.clone(), version.clone()));
+            let shard = &shards[provider];
+            if !shard.is_complete(version, platforms) {
+                let demotion = if shard.is_demoted(version, platforms, now) {
+                    MISS_DEMOTION
+                } else {
+                    0
+                };
+                frontier.push((rank as i64 + demotion, provider.clone(), version.clone()));
             }
         }
     }
@@ -305,8 +363,10 @@ pub fn build_frontier(
     frontier
 }
 
-/// Fill in missing platform hashes for one version. Append-only: platforms
-/// already recorded (including null = asset absent) are never touched.
+/// Fill in missing platform hashes for one version. Recorded hashes are
+/// never touched; every gap is retryable. A 404 stamps a write-once miss
+/// timestamp (scheduling metadata for demotion) and charges nothing —
+/// only successfully hashed tarballs consume the artifact budget.
 pub async fn resolve_version(
     client: &reqwest::Client,
     base: &str,
@@ -315,6 +375,7 @@ pub async fn resolve_version(
     platforms: &[String],
     budget: &mut Budget,
     concurrency: usize,
+    now: &chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     let provider = shard.provider.clone();
     let entry = shard.entries.entry(version.to_string()).or_default();
@@ -324,10 +385,9 @@ pub async fn resolve_version(
         Err(_) => BTreeMap::new(),
     };
 
-    // Sequentially charge the budget, then stream-hash concurrently.
     let mut fetches: Vec<(String, String)> = Vec::new(); // (platform, url)
     for platform in platforms {
-        if entry.hashes.contains_key(platform) || budget.exhausted() {
+        if entry.has_hash(platform) || budget.exhausted() {
             continue;
         }
         let asset = asset_name(&provider, version, platform);
@@ -335,9 +395,9 @@ pub async fn resolve_version(
             let sri = sha256_sri(hexdigest)?;
             log(&format!("  {provider} v{version} {platform}: {sri}"));
             entry.hashes.insert(platform.clone(), Some(sri));
+            entry.misses.remove(platform);
             continue;
         }
-        budget.charge();
         let url = format!("{}/{asset}", release_base_url(base, &provider, version));
         fetches.push((platform.clone(), url));
     }
@@ -356,11 +416,16 @@ pub async fn resolve_version(
             Ok(hexdigest) => {
                 let sri = sha256_sri(&hexdigest)?;
                 log(&format!("  {provider} v{version} {platform}: {sri}"));
-                entry.hashes.insert(platform, Some(sri));
+                entry.hashes.insert(platform.clone(), Some(sri));
+                entry.misses.remove(&platform);
+                budget.charge();
             }
-            Err(FetchError::Missing(code)) => {
-                log(&format!("  {provider} v{version} {platform}: no asset (HTTP {code})"));
-                entry.hashes.insert(platform, None);
+            Err(FetchError::Missing) => {
+                log(&format!("  {provider} v{version} {platform}: no asset (HTTP 404), will retry later"));
+                entry
+                    .misses
+                    .entry(platform)
+                    .or_insert_with(|| now.to_rfc3339());
             }
             Err(FetchError::Other(e)) => {
                 log(&format!("  {provider} v{version} {platform}: {e}, will retry next run"));
@@ -369,7 +434,7 @@ pub async fn resolve_version(
     }
 
     if entry.observed_at.is_none() && !entry.hashes.is_empty() {
-        entry.observed_at = Some(chrono::Utc::now().to_rfc3339());
+        entry.observed_at = Some(now.to_rfc3339());
     }
     Ok(())
 }
@@ -440,7 +505,8 @@ pub async fn cmd_walk(opts: WalkOpts) -> Result<i32> {
         }
     }
 
-    let frontier = build_frontier(&pinned, &enumerated, &shards, &platforms);
+    let now = chrono::Utc::now();
+    let frontier = build_frontier(&pinned, &enumerated, &shards, &platforms, &now);
     log(&format!(
         "Frontier: {} incomplete versions; budget {} artifacts / {}s",
         frontier.len(),
@@ -463,6 +529,7 @@ pub async fn cmd_walk(opts: WalkOpts) -> Result<i32> {
             &platforms,
             &mut budget,
             opts.concurrency,
+            &now,
         )
         .await?;
         shard.save(&opts.index_dir)?;
@@ -540,9 +607,9 @@ pub async fn cmd_verify(opts: VerifyOpts) -> Result<i32> {
                     log(&format!("  ok: {provider} v{version} {platform}"));
                 }
             }
-            Err(FetchError::Missing(code)) => {
+            Err(FetchError::Missing) => {
                 log(&format!(
-                    "  {provider} v{version} {platform}: unavailable (HTTP {code}) — investigate"
+                    "  {provider} v{version} {platform}: unavailable (HTTP 404) — investigate"
                 ));
                 mismatches += 1;
             }
@@ -578,6 +645,10 @@ mod tests {
         }
     }
 
+    fn now() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now()
+    }
+
     #[test]
     fn frontier_is_breadth_first_with_pins_up_front() {
         let platforms = vec!["linux-amd64".to_string()];
@@ -589,7 +660,7 @@ mod tests {
             ("bbb".to_string(), vec!["1.5.0".into(), "1.4.0".into()]),
         ];
         let pinned = vec![("aaa".to_string(), "1.0.0".to_string())];
-        let frontier = build_frontier(&pinned, &enumerated, &shards, &platforms);
+        let frontier = build_frontier(&pinned, &enumerated, &shards, &platforms, &now());
         let order: Vec<(i64, &str, &str)> = frontier
             .iter()
             .map(|(r, p, v)| (*r, p.as_str(), v.as_str()))
@@ -616,19 +687,50 @@ mod tests {
         let mut shards = IndexMap::new();
         shards.insert("aaa".to_string(), shard);
         let enumerated = vec![("aaa".to_string(), vec!["2.0.0".into(), "1.0.0".into()])];
-        let frontier = build_frontier(&[], &enumerated, &shards, &platforms);
+        let frontier = build_frontier(&[], &enumerated, &shards, &platforms, &now());
         assert_eq!(frontier.len(), 1);
         assert_eq!(frontier[0].2, "1.0.0");
     }
 
     #[test]
-    fn null_hash_counts_as_recorded() {
+    fn legacy_null_hash_is_retryable() {
         let platforms = vec!["linux-amd64".to_string()];
         let mut shard = shard_with("aaa");
         let mut entry = Entry::default();
         entry.hashes.insert("linux-amd64".into(), None);
         shard.entries.insert("1.0.0".to_string(), entry);
-        assert!(shard.is_complete("1.0.0", &platforms));
+        assert!(!shard.is_complete("1.0.0", &platforms));
+        // No miss timestamp for it either, so it retries at natural rank.
+        assert!(!shard.is_demoted("1.0.0", &platforms, &now()));
+    }
+
+    #[test]
+    fn stale_misses_demote_fresh_misses_do_not() {
+        let platforms = vec!["linux-amd64".to_string(), "linux-arm64".to_string()];
+        let mut shard = shard_with("aaa");
+        let mut entry = Entry::default();
+        entry.hashes.insert("linux-amd64".into(), Some("sha256-x".into()));
+        let stale = (now() - chrono::Duration::seconds(MISS_GRACE_SECS + 60)).to_rfc3339();
+        entry.misses.insert("linux-arm64".into(), stale);
+        shard.entries.insert("2.0.0".to_string(), entry.clone());
+        assert!(shard.is_demoted("2.0.0", &platforms, &now()));
+
+        // Same shape but the miss is fresh (mid-publish window): no demotion.
+        entry.misses.insert("linux-arm64".into(), now().to_rfc3339());
+        shard.entries.insert("1.0.0".to_string(), entry);
+        assert!(!shard.is_demoted("1.0.0", &platforms, &now()));
+
+        // Demoted versions sort behind every natural-rank version.
+        let mut shards = IndexMap::new();
+        shards.insert("aaa".to_string(), shard);
+        let enumerated = vec![(
+            "aaa".to_string(),
+            vec!["2.0.0".into(), "1.0.0".into()],
+        )];
+        let frontier = build_frontier(&[], &enumerated, &shards, &platforms, &now());
+        let versions: Vec<&str> = frontier.iter().map(|(_, _, v)| v.as_str()).collect();
+        assert_eq!(versions, vec!["1.0.0", "2.0.0"]);
+        assert!(frontier[1].0 >= MISS_DEMOTION);
     }
 
     #[test]

@@ -100,7 +100,7 @@ async fn sha256_checksums_file_skips_downloads() {
 }
 
 #[tokio::test]
-async fn absent_asset_recorded_null_and_never_retried() {
+async fn missing_asset_stamps_miss_once_and_stays_retryable() {
     let server = MockServer::start().await;
     let tmp = tempfile::tempdir().unwrap();
     Mock::given(method("GET"))
@@ -111,14 +111,63 @@ async fn absent_asset_recorded_null_and_never_retried() {
     Mock::given(method("GET"))
         .and(path(artifact_path("aaa", "1.0.0")))
         .respond_with(ResponseTemplate::new(404))
-        .expect(1) // second walk must not retry
+        .expect(2) // 404 is never a fact: a second walk retries
         .mount(&server)
         .await;
 
     cmd_walk(walk_opts(&server, tmp.path(), &["aaa@1.0.0"])).await.unwrap();
-    assert_eq!(recorded(tmp.path(), "aaa", "1.0.0"), Some(None));
+    assert_eq!(recorded(tmp.path(), "aaa", "1.0.0"), None); // no hash, no null
+    let shard = Shard::load(tmp.path(), "aaa").unwrap();
+    let first_miss = shard.entries["1.0.0"].misses[PLATFORM].clone();
+
     cmd_walk(walk_opts(&server, tmp.path(), &["aaa@1.0.0"])).await.unwrap();
-    assert_eq!(recorded(tmp.path(), "aaa", "1.0.0"), Some(None));
+    let shard = Shard::load(tmp.path(), "aaa").unwrap();
+    // Write-once: the retry does not touch the first-miss timestamp.
+    assert_eq!(shard.entries["1.0.0"].misses[PLATFORM], first_miss);
+}
+
+#[tokio::test]
+async fn miss_clears_when_asset_appears_and_404_costs_no_budget() {
+    let server = MockServer::start().await;
+    let tmp = tempfile::tempdir().unwrap();
+    for (provider, version) in [("aaa", "1.0.0"), ("bbb", "1.0.0")] {
+        Mock::given(method("GET"))
+            .and(path(checksums_path(provider, version)))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+    }
+    // aaa's asset is missing (mid-publish); bbb's exists.
+    let gone = Mock::given(method("GET"))
+        .and(path(artifact_path("aaa", "1.0.0")))
+        .respond_with(ResponseTemplate::new(404));
+    let guard = server.register_as_scoped(gone).await;
+    let body = b"late-arrival".to_vec();
+    Mock::given(method("GET"))
+        .and(path(artifact_path("bbb", "1.0.0")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"other".to_vec()))
+        .mount(&server)
+        .await;
+
+    // Budget of 1: the 404 on aaa must not consume it — bbb still gets hashed.
+    let mut opts = walk_opts(&server, tmp.path(), &["aaa@1.0.0", "bbb@1.0.0"]);
+    opts.max_artifacts = 1;
+    cmd_walk(opts).await.unwrap();
+    assert_eq!(recorded(tmp.path(), "aaa", "1.0.0"), None);
+    assert!(recorded(tmp.path(), "bbb", "1.0.0").flatten().is_some());
+
+    // The asset finishes publishing; the next walk heals the gap and clears
+    // the miss bookkeeping.
+    drop(guard);
+    Mock::given(method("GET"))
+        .and(path(artifact_path("aaa", "1.0.0")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(body.clone()))
+        .mount(&server)
+        .await;
+    cmd_walk(walk_opts(&server, tmp.path(), &["aaa@1.0.0"])).await.unwrap();
+    assert_eq!(recorded(tmp.path(), "aaa", "1.0.0"), Some(Some(sri_of(&body))));
+    let shard = Shard::load(tmp.path(), "aaa").unwrap();
+    assert!(shard.entries["1.0.0"].misses.is_empty());
 }
 
 #[tokio::test]

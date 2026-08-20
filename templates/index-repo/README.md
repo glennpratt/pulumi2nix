@@ -15,10 +15,13 @@ entries or a drift alarm.
 
 Layout:
 
-- `index/<provider>.json` — shards: version → platform → SRI hash
-  (null = release exists but that platform's asset doesn't). Hash-only by
-  design: consumers derive download URLs locally, so a corrupted index can
-  at worst fail a build, never substitute code.
+- `index/<provider>.json` — shards: version → platform → SRI hash.
+  Hash-only by design: consumers derive download URLs locally, so a
+  corrupted index can at worst fail a build, never substitute code.
+  Absence is never recorded as fact — a 404 stamps a write-once `misses`
+  timestamp (scheduling metadata only): fresh misses retry at natural
+  priority (mid-publish releases settle), stale ones retry behind all
+  fresh work, and every gap heals automatically if the asset appears.
 - `providers.txt` — which official providers the cron walk covers.
 - `conflicts/` — written by `verify` when a re-hashed artifact no longer
   matches its recorded hash (tag/asset rewrite upstream). Never
