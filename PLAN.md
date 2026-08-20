@@ -46,7 +46,10 @@ Architecture (from `scratch/Pulumi Nix Module for Dependency Management.md`):
         downloads, no $PATH warnings
 - [x] README.md (usage, architecture sketch)
 - [x] CI: GitHub Actions — build + E2E preview on Linux (nix flake check)
-      (workflow written; first run pending push to GitHub)
+      (workflow written; GHA on hold for now — Linux verification runs on the
+      bos-lhv4l0 VM instead, same repo path under ~/Code/github.com/glennpratt)
+- [x] Linux (x86_64) verification on VM: nix flake check incl. autoPatchelf path
+      (bos-lhv4l0, 2026-08-20: e2e-preview passed in sandbox, exit 0)
 
 ## Phase 2 — Ergonomics
 
