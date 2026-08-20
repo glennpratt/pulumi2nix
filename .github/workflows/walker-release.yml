@@ -36,7 +36,10 @@ jobs:
           walker's checkPhase; packing is a Nix derivation, see flake.nix)
         run: |
           nix build .#pulumi2nix-index-tarball
-          install -m 0644 result pulumi2nix-index-x86_64-linux.tar.gz
+          # `result` is a store symlink; the release asset name and the
+          # attestation subject both come from the file's basename, so
+          # materialize it under its published name.
+          cp -L result pulumi2nix-index-x86_64-linux.tar.gz
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
