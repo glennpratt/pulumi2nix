@@ -88,6 +88,18 @@ re-hashes random samples continuously and records drift under conflicts/
       (tested: identical output to slow path for pulumi-random)
 - [x] Index repo template in `templates/index-repo/` (cron workflow with
       single-writer concurrency, drift → auto-filed issue, pinned rev)
+- [x] Reusable workflow `.github/workflows/index-walk.yml` in THIS repo;
+      index repo's walk.yml is a ~10-line stub pinning it by SHA — and
+      `github.job_workflow_sha` checks out the walker at that same pin, so
+      one SHA governs workflow logic + code (no Nix/uv needed in index CI)
+- [x] Tests before repo creation:
+      - hermetic walker unit tests (`lock/tests/`, in `nix flake check`):
+        BFS order, budget stop, append-only resume, absent-asset nulls,
+        pinned `name@version` demand lane, checksum shortcut, drift
+        detection + conflict reports, lock-tool fast path
+      - language-agnostic network e2e (`scripts/index-e2e.sh`): walks the
+        golden version from examples/random/pulumi-lock.json into a temp
+        index and asserts byte-identical hashes
 - [ ] Create the actual `pulumi-nix-index` repo from the template + first
       backfill runs; set branch protection (bot-only pushes)
 - [ ] Default `--index` URL in pulumi2nix-lock once the repo exists

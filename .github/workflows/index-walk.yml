@@ -1,0 +1,82 @@
+# Reusable workflow for pulumi-nix-index repos. The caller pins this file by
+# SHA (`uses: glennpratt/pulumi2nix/.github/workflows/index-walk.yml@<sha>`),
+# and github.job_workflow_sha makes the walker code check out at that same
+# pinned revision — one pin governs both workflow logic and code. The walker
+# is stdlib-only Python, so index CI needs no Nix, no uv, no installs.
+name: index-walk
+
+on:
+  workflow_call:
+    inputs:
+      provider:
+        description: "Demand lane: index this provider now (name or name@version)"
+        type: string
+        default: ""
+      max-artifacts:
+        description: "Backfill budget: tarballs to hash this run"
+        type: number
+        default: 800
+      max-seconds:
+        description: "Backfill budget: wall-clock seconds"
+        type: number
+        default: 3600
+      verify-sample:
+        description: "Existing entries to re-verify against drift"
+        type: number
+        default: 50
+
+jobs:
+  walk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4 # the caller's index repo
+
+      - uses: actions/checkout@v4
+        with:
+          repository: glennpratt/pulumi2nix
+          ref: ${{ github.job_workflow_sha }}
+          path: .pulumi2nix
+
+      - name: Walk (breadth-first backfill within budget)
+        env:
+          PYTHONPATH: .pulumi2nix/lock/src
+        run: |
+          ARGS=(walk --index-dir . --providers-file providers.txt
+                --max-artifacts "${{ inputs.max-artifacts }}"
+                --max-seconds "${{ inputs.max-seconds }}")
+          if [ -n "${{ inputs.provider }}" ]; then
+            ARGS+=(--provider "${{ inputs.provider }}")
+          fi
+          python3 -m pulumi2nix_lock.index "${ARGS[@]}"
+
+      - name: Verify (re-witness a random sample of existing entries)
+        id: verify
+        continue-on-error: true
+        env:
+          PYTHONPATH: .pulumi2nix/lock/src
+        run: |
+          python3 -m pulumi2nix_lock.index verify --index-dir . \
+            --sample "${{ inputs.verify-sample }}"
+
+      - name: Commit new entries (and any conflict reports)
+        run: |
+          git config user.name "pulumi-nix-index bot"
+          git config user.email "actions@github.com"
+          mkdir -p index conflicts
+          git add index conflicts
+          git diff --cached --quiet && exit 0
+          git commit -m "walk: $(date -u +%Y-%m-%dT%H:%MZ)"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push
+
+      - name: Raise the alarm on drift
+        if: steps.verify.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "DRIFT: released artifact no longer matches its recorded hash" \
+            --body "verify failed in ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — see conflicts/ in the latest commit. Existing index entries were NOT modified." \
+            || true
+          exit 1

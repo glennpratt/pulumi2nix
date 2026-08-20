@@ -107,6 +107,14 @@
       });
 
       checks = forAllSystems (pkgs: {
+        # Hermetic walker tests: BFS ordering, budgets, append-only resume,
+        # absent-asset nulls, drift detection, lock-tool fast path.
+        walker-tests = pkgs.runCommand "pulumi2nix-walker-tests"
+          { nativeBuildInputs = [ pkgs.python3 ]; } ''
+          cd ${./lock}
+          PYTHONPATH=src python3 -m unittest discover -s tests -v
+          touch $out
+        '';
         # Default mode: official pulumi release pinned by the lock's `cli`
         # section — SDK, CLI, and language hosts all at the uv.lock version.
         e2e-preview = mkPreviewCheck pkgs "e2e-preview" (exampleFor pkgs { });

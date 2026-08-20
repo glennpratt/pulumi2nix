@@ -213,12 +213,27 @@ def cmd_walk(args: argparse.Namespace) -> int:
         log("No providers given (use --provider and/or --providers-file)")
         return 2
 
+    # `name@version` pins one exact version (demand lane) and jumps every
+    # BFS layer; bare names get the full breadth-first enumeration.
+    pinned: list[tuple[str, str]] = []
+    plain: list[str] = []
+    for p in providers:
+        if "@" in p:
+            name, _, ver = p.partition("@")
+            pinned.append((name, ver.removeprefix("v")))
+        else:
+            plain.append(p)
+
     # Build the frontier: (rank, provider, version) for every incomplete
     # version, breadth-first — every provider's rank N before any rank N+1.
     frontier: list[tuple[int, str, str]] = []
     shards: dict[str, dict] = {}
-    for provider in providers:
-        shards[provider] = load_shard(index_dir, provider)
+    for provider, version in pinned:
+        shards.setdefault(provider, load_shard(index_dir, provider))
+        if not is_version_complete(shards[provider], version, platforms):
+            frontier.append((-1, provider, version))
+    for provider in plain:
+        shards.setdefault(provider, load_shard(index_dir, provider))
         try:
             versions = list_versions(provider)
         except subprocess.SubprocessError as e:
@@ -296,8 +311,9 @@ def main(argv: list[str] | None = None) -> int:
     walk = sub.add_parser("walk", help="fill in missing hashes, breadth-first, within a budget")
     walk.add_argument("--index-dir", type=Path, default=Path("."),
                       help="index repo root (shards live under index/)")
-    walk.add_argument("--provider", action="append", dest="providers", metavar="NAME",
-                      help="provider name (repeatable)")
+    walk.add_argument("--provider", action="append", dest="providers", metavar="NAME[@VERSION]",
+                      help="provider name (repeatable); name@version pins one "
+                           "exact version and jumps the breadth-first queue")
     walk.add_argument("--providers-file", type=Path,
                       help="file with one provider name per line (# comments ok)")
     walk.add_argument("--platform", action="append", dest="platforms", metavar="TARGET",
