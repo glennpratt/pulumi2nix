@@ -104,11 +104,24 @@
         pulumi2nix-index = walkerFor pkgs;
         default = pulumi2nix-lock;
         example-random = exampleFor pkgs { };
-      } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+      } // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (rec {
         # Fully static (musl) walker for the attested GHA release — built
         # with Nix, no rustup/apt toolchains (see walker-release.yml).
         pulumi2nix-index-static = walkerFor pkgs.pkgsStatic;
-      });
+        # The release artifact itself: a deterministic tarball (mtime,
+        # ownership, ordering, gzip timestamp all pinned) so the executable
+        # bit survives GitHub Releases and anyone can `nix build` this
+        # commit and compare sha256 against the published asset —
+        # reproducibility on top of the attestation.
+        pulumi2nix-index-tarball = pkgs.runCommand
+          "pulumi2nix-index-${pkgs.stdenv.hostPlatform.system}.tar.gz"
+          { } ''
+          install -m 0755 ${lib.getExe pulumi2nix-index-static} pulumi2nix-index
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime='1970-01-01 00:00:00 UTC' \
+              -cf - pulumi2nix-index | gzip -n > $out
+        '';
+      }));
 
       apps = forAllSystems (pkgs: {
         pulumi2nix-lock = {

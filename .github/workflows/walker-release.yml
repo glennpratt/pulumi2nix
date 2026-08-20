@@ -32,18 +32,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@v16
-      - name: Build static walker (tests run in checkPhase)
-        run: nix build .#pulumi2nix-index-static
-      - name: Pack deterministic tarball (preserves the executable bit)
-        # Every source of nondeterminism pinned (mtime, owner, ordering,
-        # gzip timestamp), so anyone can rebuild this commit and compare
-        # sha256 — reproducibility on top of the attestation.
+      - name: Build deterministic release tarball (cargo tests run in the
+          walker's checkPhase; packing is a Nix derivation, see flake.nix)
         run: |
-          install -m 0755 result/bin/pulumi2nix-index pulumi2nix-index
-          tar --sort=name --owner=0 --group=0 --numeric-owner \
-              --mtime='1970-01-01 00:00:00 UTC' \
-              -cf - pulumi2nix-index | gzip -n \
-              > pulumi2nix-index-x86_64-linux.tar.gz
+          nix build .#pulumi2nix-index-tarball
+          install -m 0644 result pulumi2nix-index-x86_64-linux.tar.gz
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
@@ -55,5 +48,5 @@ jobs:
           gh release create "walker-${GITHUB_SHA}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "walker @ ${GITHUB_SHA:0:12}" \
-            --notes "Attested static walker binary built from ${GITHUB_SHA} via nix build .#pulumi2nix-index-static, packed deterministically. Verify with: gh attestation verify <file> --repo ${GITHUB_REPOSITORY}" \
+            --notes "Attested static walker built from ${GITHUB_SHA}. Reproduce with: nix build .#pulumi2nix-index-tarball (byte-identical). Verify with: gh attestation verify <file> --repo ${GITHUB_REPOSITORY}" \
             pulumi2nix-index-x86_64-linux.tar.gz
