@@ -81,10 +81,23 @@ let
     inherit pkgs resourcePlugins;
     languageHosts = effectiveLanguageHosts;
   };
+
+  # pulumi-language-python auto-selects its uv toolchain whenever a uv.lock
+  # is present (there is no opt-out short of editing Pulumi.yaml), and that
+  # toolchain runs `uv sync --inexact` before every program launch. Real uv
+  # treats Nix-installed packages as foreign provenance and would try to
+  # reinstall the whole venv into the read-only store. Under pulumi2nix the
+  # venv already matches uv.lock by construction, so sync is a semantic
+  # no-op — this shim makes it a literal one and delegates every other uv
+  # invocation (uv --version, uv venv during `pulumi install`, …) to real uv.
+  uvShim = pkgs.writeShellScriptBin "uv" ''
+    if [ "''${1:-}" = "sync" ]; then exit 0; fi
+    exec ${lib.getExe pkgs.uv} "$@"
+  '';
 in
 pkgs.writeShellApplication {
   inherit name;
-  runtimeInputs = lib.optional (pythonEnv != null) pythonEnv;
+  runtimeInputs = lib.optionals (pythonEnv != null) [ pythonEnv uvShim ];
   text = ''
     export PULUMI_HOME="''${PULUMI_HOME:-$HOME/.pulumi}"
     mkdir -p "$PULUMI_HOME/plugins"
@@ -115,6 +128,9 @@ pkgs.writeShellApplication {
     # Fail fast instead of downloading anything at runtime.
     export PULUMI_DISABLE_AUTOMATIC_PLUGIN_ACQUISITION=true
     ${lib.optionalString (pythonEnv != null) ''
+      # uv toolchain: resolve the project environment to the Nix venv.
+      export UV_PROJECT_ENVIRONMENT="${pythonEnv}"
+      # pip toolchain (projects that pin runtime.options.toolchain: pip).
       export PULUMI_PYTHON_CMD="${pythonEnv}/bin/python"
     ''}
     exec ${cli}/bin/pulumi "$@"

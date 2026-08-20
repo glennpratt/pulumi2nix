@@ -44,10 +44,8 @@
               pyproject-build-systems.overlays.default
               overlay
             ]);
-          # pip must be importable: pulumi's pip toolchain discovers required
-          # plugins via `python -m pip list`.
           pythonEnv = pythonSet.mkVirtualEnv "pulumi2nix-example-random-env"
-            (workspace.deps.default // { pip = [ ]; });
+            workspace.deps.default;
         in
         pulumi2nixLib.mkPulumiEnv ({
           inherit pkgs pythonEnv;

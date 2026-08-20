@@ -40,33 +40,30 @@ and never warns about `$PATH` fallbacks.
    CLI instead (the nixpkgs python language host is then linked through the
    plugin store).
 
-2. Tell Pulumi's Python language host to use the Nix-provided interpreter
-   instead of managing a toolchain, in `Pulumi.yaml`:
-
-   ```yaml
-   runtime:
-     name: python
-     options:
-       toolchain: pip   # honors PULUMI_PYTHON_CMD; auto-detect would demand uv
-   ```
-
-3. Build the wrapped CLI in your flake:
+2. Build the wrapped CLI in your flake — no `Pulumi.yaml` changes, no extra
+   venv contents; a plain `runtime: python` project works as-is:
 
    ```nix
    {
      inputs.pulumi2nix.url = "github:glennpratt/pulumi2nix";
 
      outputs = { self, nixpkgs, pulumi2nix, ... }: {
-       # pythonEnv: your uv2nix virtualenv — include `pip` in it, the
-       # language host discovers required plugins via `python -m pip list`.
        packages.x86_64-linux.pulumi = pulumi2nix.lib.mkPulumiEnv {
          pkgs = nixpkgs.legacyPackages.x86_64-linux;
-         pythonEnv = myUv2nixVenv;
+         pythonEnv = myUv2nixVenv;   # your uv2nix virtualenv
          lockFile = ./pulumi-lock.json;
        };
      };
    }
    ```
+
+   The language host auto-selects its **uv toolchain** (it sees `uv.lock`);
+   the wrapper makes that work purely: `UV_PROJECT_ENVIRONMENT` points uv at
+   the Nix venv, and a `uv` shim on the wrapper's PATH turns
+   `uv sync --inexact` — the pre-launch freshness check that would otherwise
+   try to rewrite the read-only store venv — into the no-op it semantically
+   is (Nix already guarantees the venv matches `uv.lock`). Plugin discovery
+   in uv mode reads `uv.lock` directly, so the venv needs no `pip`.
 
 The wrapper symlinks the immutable plugin directories from the Nix store
 into your (writable) `PULUMI_HOME` at startup, exports

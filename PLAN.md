@@ -90,14 +90,20 @@ Architecture (from `scratch/Pulumi Nix Module for Dependency Management.md`):
 - **`*_checksums.txt` release assets are often SHA1**, not SHA256 (e.g.
   pulumi-random) — unusable for Nix SRI. Lock tool uses them only when
   sha256, otherwise downloads + hashes tarballs itself.
-- **Toolchain auto-detection fights us**: the python language host walks up
-  from the program dir looking for `uv.lock` and, on finding it, demands the
-  `uv` binary at runtime (ignoring `PULUMI_PYTHON_CMD`). Projects must pin
-  `runtime.options.toolchain: pip` in Pulumi.yaml; the pip toolchain honors
-  `PULUMI_PYTHON_CMD` when no virtualenv is configured.
-- **The venv needs `pip` importable**: plugin discovery runs
-  `python -m pip list --format json` (`GetRequiredPlugins`). uv2nix venvs
-  don't include pip by default → add `pip = [ ]` to the mkVirtualEnv spec.
+- **uv toolchain tamed without forking pulumi** (2026-08-20, replaces the
+  earlier `toolchain: pip` + `pip = [ ]` workarounds — users need NO
+  Pulumi.yaml or venv changes): the language host auto-selects its uv
+  toolchain when `uv.lock` is present. Its preview path only needs
+  `uv --version` and one `uv sync --inexact` freshness check; it honors
+  `UV_PROJECT_ENVIRONMENT` for venv location, runs `<venv>/bin/python`
+  directly (never `uv run`), and its plugin discovery parses `uv.lock`
+  itself (no pip needed). Real `uv sync` treats Nix-installed packages as
+  foreign provenance and tries to reinstall into the read-only store
+  (`UV_NO_SYNC` does not affect explicit `uv sync`), so the wrapper ships a
+  `uv` shim that no-ops `sync` — semantically sound, Nix already guarantees
+  the venv matches `uv.lock` — and delegates all other uv commands.
+  Verified offline in-sandbox on macOS + Linux. Upstream idea: propose that
+  pulumi-language-python honor `UV_NO_SYNC`, making the shim unnecessary.
 - Plugin tarballs have no top-level dir; unpack into a clean subdir or
   stdenv's `env-vars` leaks into `$out`.
 - Python package version vs plugin version can diverge; `pulumi-plugin.json`
