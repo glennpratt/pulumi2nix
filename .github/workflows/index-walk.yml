@@ -105,8 +105,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue create \
-            --title "DRIFT: released artifact no longer matches its recorded hash" \
-            --body "verify failed in ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — see conflicts/ in the latest commit. Existing index entries were NOT modified." \
-            || true
+          TITLE="DRIFT: released artifact no longer matches its recorded hash"
+          BODY="verify failed in ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} — see conflicts/ in the latest commit. Existing index entries were NOT modified."
+          EXISTING=$(gh issue list --state open --search "\"$TITLE\" in:title" \
+            --json number -q '.[0].number' || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY" || true
+          else
+            gh issue create --title "$TITLE" --body "$BODY" || true
+          fi
           exit 1

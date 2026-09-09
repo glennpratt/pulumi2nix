@@ -87,16 +87,51 @@ async fn sha256_checksums_file_skips_downloads() {
         .respond_with(ResponseTemplate::new(200).set_body_string(listing))
         .mount(&server)
         .await;
+    Mock::given(method("HEAD"))
+        .and(path(artifact_path("aaa", "1.0.0")))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1) // existence confirmed by HEAD…
+        .mount(&server)
+        .await;
     Mock::given(method("GET"))
         .and(path(artifact_path("aaa", "1.0.0")))
         .respond_with(ResponseTemplate::new(200))
-        .expect(0) // the whole point: no tarball download
+        .expect(0) // …the whole point: no tarball download
         .mount(&server)
         .await;
 
     let rc = cmd_walk(walk_opts(&server, tmp.path(), &["aaa@1.0.0"])).await.unwrap();
     assert_eq!(rc, 0);
     assert_eq!(recorded(tmp.path(), "aaa", "1.0.0"), Some(Some(sri_of(body))));
+}
+
+#[tokio::test]
+async fn checksums_entry_for_phantom_asset_records_miss_not_hash() {
+    // Observed upstream (pulumi-kubernetes v2.x): the sha256 checksums file
+    // enumerates assets that were never uploaded. The listing alone must
+    // not become an index entry.
+    let server = MockServer::start().await;
+    let tmp = tempfile::tempdir().unwrap();
+    let listing = format!(
+        "{}  ./pulumi-resource-aaa-v1.0.0-{PLATFORM}.tar.gz\n",
+        hex::encode(sha2::Sha256::digest(b"phantom"))
+    );
+    Mock::given(method("GET"))
+        .and(path(checksums_path("aaa", "1.0.0")))
+        .respond_with(ResponseTemplate::new(200).set_body_string(listing))
+        .mount(&server)
+        .await;
+    Mock::given(method("HEAD"))
+        .and(path(artifact_path("aaa", "1.0.0")))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let rc = cmd_walk(walk_opts(&server, tmp.path(), &["aaa@1.0.0"])).await.unwrap();
+    assert_eq!(rc, 0);
+    assert_eq!(recorded(tmp.path(), "aaa", "1.0.0"), None); // no phantom hash
+    let shard = Shard::load(tmp.path(), "aaa").unwrap();
+    assert!(shard.entries["1.0.0"].misses.contains_key(PLATFORM));
 }
 
 #[tokio::test]

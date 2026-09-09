@@ -152,6 +152,26 @@ async fn http_get_text(client: &reqwest::Client, url: &str) -> Result<String> {
     Ok(resp.text().await?)
 }
 
+/// Does the asset actually exist? Checksums files can list assets that were
+/// never uploaded (observed on pulumi-kubernetes v2.x: sha256 checksums
+/// enumerate linux-arm64 while the release has no such asset), so a
+/// checksums entry alone is not proof of existence.
+pub async fn asset_exists(client: &reqwest::Client, url: &str) -> Result<bool, FetchError> {
+    let resp = client
+        .head(url)
+        .send()
+        .await
+        .map_err(|e| FetchError::Other(e.to_string()))?;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(true)
+    } else if status == 404 {
+        Ok(false)
+    } else {
+        Err(FetchError::Other(format!("HTTP {status}")))
+    }
+}
+
 // --- version enumeration ----------------------------------------------------
 
 pub fn version_key(version: &str) -> Option<(u64, u64, u64)> {
@@ -391,14 +411,38 @@ pub async fn resolve_version(
             continue;
         }
         let asset = asset_name(&provider, version, platform);
+        let url = format!("{}/{asset}", release_base_url(base, &provider, version));
         if let Some(hexdigest) = checksums.get(&asset) {
-            let sri = sha256_sri(hexdigest)?;
-            log(&format!("  {provider} v{version} {platform}: {sri}"));
-            entry.hashes.insert(platform.clone(), Some(sri));
-            entry.misses.remove(platform);
+            // A checksums line is not proof the asset was uploaded — confirm
+            // existence before recording (one cheap HEAD).
+            match asset_exists(client, &url).await {
+                Ok(true) => {
+                    let sri = sha256_sri(hexdigest)?;
+                    log(&format!("  {provider} v{version} {platform}: {sri}"));
+                    entry.hashes.insert(platform.clone(), Some(sri));
+                    entry.misses.remove(platform);
+                }
+                Ok(false) => {
+                    log(&format!(
+                        "  {provider} v{version} {platform}: in checksums but no asset (HTTP 404), will retry later"
+                    ));
+                    entry
+                        .misses
+                        .entry(platform.clone())
+                        .or_insert_with(|| now.to_rfc3339());
+                }
+                Err(e) => {
+                    let msg = match e {
+                        FetchError::Other(m) => m,
+                        FetchError::Missing => "HTTP 404".to_string(),
+                    };
+                    log(&format!(
+                        "  {provider} v{version} {platform}: HEAD failed ({msg}), will retry next run"
+                    ));
+                }
+            }
             continue;
         }
-        let url = format!("{}/{asset}", release_base_url(base, &provider, version));
         fetches.push((platform.clone(), url));
     }
 
@@ -611,6 +655,14 @@ pub async fn cmd_verify(opts: VerifyOpts) -> Result<i32> {
                 log(&format!(
                     "  {provider} v{version} {platform}: unavailable (HTTP 404) — investigate"
                 ));
+                record_conflict(
+                    &opts.index_dir,
+                    provider,
+                    version,
+                    platform,
+                    recorded,
+                    "UNAVAILABLE (HTTP 404): recorded hash has no fetchable asset",
+                )?;
                 mismatches += 1;
             }
             Err(FetchError::Other(e)) => {

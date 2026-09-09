@@ -166,6 +166,12 @@ conflicts/ (loud failure, never a silent update).
   stdenv's `env-vars` leaks into `$out`.
 - Python package version vs plugin version can diverge; `pulumi-plugin.json`
   from the wheel is authoritative, never the PyPI version string.
+- **Checksums files can lie about existence** (found 2026-09-09 by the
+  index's verify loop): pulumi-kubernetes v2.7.7–v2.8.1 publish sha256
+  checksums enumerating linux-arm64 assets that were never uploaded. The
+  walker's checksum shortcut now HEAD-confirms the asset before recording;
+  a listing alone is never proof. Full-index audit found exactly those 4
+  phantoms out of 9,968 entries; cleaned via reviewed commit.
 
 ## Open questions / risks
 
