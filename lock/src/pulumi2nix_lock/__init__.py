@@ -349,6 +349,12 @@ def main(argv: list[str] | None = None) -> int:
         dest="index",
         help="skip the index; always download and hash directly",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="don't write anything; exit 1 with a diff if the existing "
+             "output file is missing or out of date with uv.lock (for CI)",
+    )
     args = parser.parse_args(argv)
 
     if not args.uv_lock.exists():
@@ -383,7 +389,28 @@ def main(argv: list[str] | None = None) -> int:
         log("No `pulumi` SDK in uv.lock; omitting cli section")
 
     lock = build_lock(specs, cli)
-    args.output.write_text(json.dumps(lock, indent=2) + "\n")
+    serialized = json.dumps(lock, indent=2) + "\n"
+
+    if args.check:
+        existing = args.output.read_text() if args.output.exists() else None
+        if existing == serialized:
+            log(f"{args.output} is up to date")
+            return 0
+        if existing is None:
+            log(f"{args.output} does not exist; run pulumi2nix-lock to create it")
+            return 1
+        import difflib
+
+        sys.stderr.writelines(difflib.unified_diff(
+            existing.splitlines(keepends=True),
+            serialized.splitlines(keepends=True),
+            fromfile=str(args.output),
+            tofile=f"{args.output} (regenerated from {args.uv_lock})",
+        ))
+        log(f"{args.output} is out of date; run pulumi2nix-lock to refresh it")
+        return 1
+
+    args.output.write_text(serialized)
     log(f"Wrote {args.output} ({len(specs)} plugins)")
     return 0
 

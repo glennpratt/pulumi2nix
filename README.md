@@ -25,6 +25,9 @@ and never warns about `$PATH` fallbacks.
    nix run github:glennpratt/pulumi2nix#pulumi2nix-lock
    ```
 
+   In CI, `pulumi2nix-lock --check` verifies the committed file instead of
+   writing: exit 1 with a diff when `uv.lock` has drifted.
+
    It reads each Pulumi provider wheel pinned in `uv.lock` (verified against
    the lockfile's sha256), extracts the embedded `pulumi-plugin.json`
    (the authoritative plugin name/version — PyPI version strings can

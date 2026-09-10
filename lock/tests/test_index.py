@@ -68,5 +68,40 @@ class IndexFastPathTests(unittest.TestCase):
         self.assertEqual(lock.index_hashes(str(self.index_dir), spec, PLATFORMS), {})
 
 
+class CheckModeTests(unittest.TestCase):
+    """--check compares a regenerated lock against the existing file.
+
+    Uses a uv.lock with no pulumi packages so no network is touched: the
+    regenerated lock is the empty {"version": 1, "plugins": {}} document.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+        (self.dir / "uv.lock").write_text(
+            'version = 1\n\n[[package]]\nname = "requests"\nversion = "2.0.0"\n')
+        self.args = ["--uv-lock", str(self.dir / "uv.lock"),
+                     "-o", str(self.dir / "pulumi-lock.json")]
+
+    def test_check_missing_file_fails(self):
+        self.assertEqual(lock.main(self.args + ["--check"]), 1)
+
+    def test_check_passes_after_generate_and_check_writes_nothing(self):
+        self.assertEqual(lock.main(self.args), 0)
+        written = (self.dir / "pulumi-lock.json").read_text()
+        self.assertEqual(lock.main(self.args + ["--check"]), 0)
+        self.assertEqual((self.dir / "pulumi-lock.json").read_text(), written)
+
+    def test_check_detects_stale_file(self):
+        self.assertEqual(lock.main(self.args), 0)
+        stale = json.loads((self.dir / "pulumi-lock.json").read_text())
+        stale["plugins"]["ghost"] = {"version": "0.0.1", "hashes": {}}
+        (self.dir / "pulumi-lock.json").write_text(json.dumps(stale, indent=2) + "\n")
+        self.assertEqual(lock.main(self.args + ["--check"]), 1)
+        # --check never rewrites the file, even when stale.
+        self.assertIn("ghost", (self.dir / "pulumi-lock.json").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
