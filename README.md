@@ -60,6 +60,21 @@ and never warns about `$PATH` fallbacks.
    }
    ```
 
+   pulumi2nix's `uv2nix`/`pyproject-nix`/`pyproject-build-systems` inputs
+   are used only by its own examples and checks — `lib` is pkgs-agnostic
+   and never evaluates them. If you already carry those inputs, dedupe your
+   lock with `follows`:
+
+   ```nix
+   pulumi2nix = {
+     url = "github:glennpratt/pulumi2nix";
+     inputs.nixpkgs.follows = "nixpkgs";
+     inputs.pyproject-nix.follows = "pyproject-nix";
+     inputs.uv2nix.follows = "uv2nix";
+     inputs.pyproject-build-systems.follows = "pyproject-build-systems";
+   };
+   ```
+
    The language host auto-selects its **uv toolchain** (it sees `uv.lock`);
    the wrapper makes that work purely: `UV_PROJECT_ENVIRONMENT` points uv at
    the Nix venv, and a `uv` shim on the wrapper's PATH turns
