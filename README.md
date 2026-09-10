@@ -60,20 +60,10 @@ and never warns about `$PATH` fallbacks.
    }
    ```
 
-   pulumi2nix's `uv2nix`/`pyproject-nix`/`pyproject-build-systems` inputs
-   are used only by its own examples and checks — `lib` is pkgs-agnostic
-   and never evaluates them. If you already carry those inputs, dedupe your
-   lock with `follows`:
-
-   ```nix
-   pulumi2nix = {
-     url = "github:glennpratt/pulumi2nix";
-     inputs.nixpkgs.follows = "nixpkgs";
-     inputs.pyproject-nix.follows = "pyproject-nix";
-     inputs.uv2nix.follows = "uv2nix";
-     inputs.pyproject-build-systems.follows = "pyproject-build-systems";
-   };
-   ```
+   pulumi2nix's only input is `nixpkgs` (`lib` is pkgs-agnostic; the
+   uv2nix stack used by its examples and checks lives in the `dev/`
+   subflake, not in your lock). Dedupe with the usual one-liner:
+   `inputs.pulumi2nix.inputs.nixpkgs.follows = "nixpkgs";`
 
    The language host auto-selects its **uv toolchain** (it sees `uv.lock`);
    the wrapper makes that work purely: `UV_PROJECT_ENVIRONMENT` points uv at
@@ -90,8 +80,8 @@ then execs the real CLI. Anything missing fails fast instead of silently
 downloading.
 
 See [examples/random](examples/random) for a complete working project; the
-flake's `checks.<system>.e2e-preview` runs `pulumi preview` against it fully
-offline inside the Nix build sandbox.
+dev flake's checks (`nix flake check ./dev`) run `pulumi preview` against it
+fully offline inside the Nix build sandbox.
 
 ## Library API (`pulumi2nix.lib`)
 

@@ -53,6 +53,15 @@ Architecture (from `scratch/Pulumi Nix Module for Dependency Management.md`):
 
 ## Phase 2 — Ergonomics
 
+- [x] Consumer-lock hygiene (2026-09-09): root flake's only input is
+      nixpkgs. The uv2nix stack + offline e2e checks moved to the `dev/`
+      subflake, which reaches the parent via narrow relative path inputs
+      (`../nix`, `../examples/random`, flake=false; Nix >= 2.26) — NOT
+      `path:..`, which would copy gitignored build artifacts
+      (walker/target, ~GBs) into the store. Relative inputs lock without
+      narHash so the dev lock never goes stale. CI/VM run both:
+      `nix flake check` and `nix flake check ./dev`.
+
 - [x] Language host handling (prioritized 2026-08-20): pin CLI + language
       hosts to the `pulumi` SDK version from uv.lock. Implemented as a `cli`
       section in pulumi-lock.json → `fetchCli` builds the official

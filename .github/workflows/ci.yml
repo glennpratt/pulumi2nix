@@ -13,5 +13,7 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@v16
       - name: Build pulumi2nix-lock
         run: nix build .#pulumi2nix-lock
-      - name: Flake check (offline e2e pulumi preview)
+      - name: Flake check (walker + lock tool tests)
         run: nix flake check -L
+      - name: Dev flake check (offline e2e pulumi preview)
+        run: nix flake check ./dev -L
